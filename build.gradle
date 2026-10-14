@@ -1,0 +1,41 @@
+plugins {
+    id 'application'
+    id 'java'
+}
+
+group = 'ru.restoreyandex'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+application {
+    mainClass = 'ru.restoreyandex.app.RecoveryApplication'
+}
+
+dependencies {
+    implementation 'net.java.dev.jna:jna:5.16.0'
+    implementation 'net.java.dev.jna:jna-platform:5.16.0'
+    implementation 'org.jcodec:jcodec-javase:0.2.5'
+
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+tasks.named('jar') {
+    manifest {
+        attributes 'Main-Class': application.mainClass
+    }
+}

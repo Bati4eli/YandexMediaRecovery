@@ -1,0 +1,6 @@
+.gradle/
+build/
+.idea/
+*.log
+yandex-media-recovery.properties
+recovery-log-*.csv
