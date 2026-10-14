@@ -3,4 +3,5 @@ build/
 .idea/
 *.log
 yandex-media-recovery.properties
+yandex-preview-recovery.properties
 recovery-log-*.csv

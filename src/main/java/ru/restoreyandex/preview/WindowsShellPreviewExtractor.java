@@ -36,8 +36,9 @@ import java.util.Optional;
  *     <li>инициализирует COM в текущем рабочем потоке;</li>
  *     <li>создаёт Shell-объект для абсолютного пути через
  *         {@code SHCreateItemFromParsingName};</li>
- *     <li>запрашивает у {@code IShellItemImageFactory} объект {@code HBITMAP}
- *         размером до 512×512 пикселей;</li>
+ *     <li>сначала запрашивает у {@code IShellItemImageFactory} объект
+ *         {@code HBITMAP} до 2048×2048 пикселей, затем при отсутствии такого
+ *         кэша — запасной вариант до 512×512 пикселей;</li>
  *     <li>передаёт пиксели {@code HBITMAP} в {@link BufferedImage}, который
  *         затем сохраняет сервис восстановления.</li>
  * </ol>
@@ -46,8 +47,10 @@ import java.util.Optional;
  * миниатюру стандартной иконкой формата файла. Поэтому в резервную копию не
  * попадёт ярлык, иконка JPG или иной ложный результат. Если миниатюра уже есть
  * в кэше Проводника, Windows отдаёт её. Иначе установленный провайдер Яндекс
- * Диска может вернуть своё облачное превью. Когда ни тот, ни другой вариант
- * недоступен, метод возвращает пустой результат, а вызывающий код фиксирует
+ * Диска может вернуть своё облачное превью. Дополнительный флаг
+ * {@code INCACHEONLY} не разрешает Shell ждать загрузки полного файла: берётся
+ * только уже доступная миниатюра. Когда её нет, метод возвращает пустой
+ * результат, а вызывающий код фиксирует
  * {@code NO_FILE}.</p>
  *
  * <p>Владение нативными ресурсами остаётся в этом классе: после преобразования
@@ -60,6 +63,10 @@ import java.util.Optional;
 public final class WindowsShellPreviewExtractor implements PreviewExtractor {
     private static final String IMAGE_FACTORY_IID = "{BCC18B79-BA16-442F-80C4-8A59C30C463B}";
     private static final int THUMBNAIL_ONLY = 0x8;
+    private static final int IN_CACHE_ONLY = 0x10;
+    private static final int BIGGER_SIZE_OK = 0x1;
+    private static final int HIGH_RESOLUTION_SIZE = 2048;
+    private static final int FALLBACK_SIZE = 512;
     private static final int DIB_RGB_COLORS = 0;
     private static final int BI_RGB = 0;
 
@@ -88,17 +95,14 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
                 return Optional.empty();
             }
             shellItem = reference.getValue();
-            PointerByReference bitmapReference = new PointerByReference();
-            int getImageResult = invoke(shellItem, 3, shellItem, new SizeByValue(512, 512),
-                    THUMBNAIL_ONLY, bitmapReference);
-            if (getImageResult < 0 || bitmapReference.getValue() == null) {
+            Optional<WinDef.HBITMAP> bitmap = getBestAvailableBitmap(shellItem);
+            if (bitmap.isEmpty()) {
                 return Optional.empty();
             }
-            WinDef.HBITMAP bitmap = new WinDef.HBITMAP(bitmapReference.getValue());
             try {
-                return Optional.ofNullable(toBufferedImage(bitmap));
+                return Optional.ofNullable(toBufferedImage(bitmap.get()));
             } finally {
-                GDI32.INSTANCE.DeleteObject(bitmap);
+                GDI32.INSTANCE.DeleteObject(bitmap.get());
             }
         } catch (RuntimeException exception) {
             return Optional.empty();
@@ -108,6 +112,28 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
             }
             Ole32.INSTANCE.CoUninitialize();
         }
+    }
+
+    /**
+     * Запрашивает максимальное уже закэшированное превью. При отсутствии
+     * большой версии повторяет запрос для 512 пикселей, чтобы не терять
+     * единственное доступное, но менее детальное изображение.
+     */
+    private Optional<WinDef.HBITMAP> getBestAvailableBitmap(Pointer shellItem) {
+        Optional<WinDef.HBITMAP> highResolution = getBitmap(shellItem, HIGH_RESOLUTION_SIZE,
+                THUMBNAIL_ONLY | IN_CACHE_ONLY | BIGGER_SIZE_OK);
+        return highResolution.isPresent() ? highResolution
+                : getBitmap(shellItem, FALLBACK_SIZE, THUMBNAIL_ONLY | IN_CACHE_ONLY);
+    }
+
+    /** Запрашивает миниатюру указанного размера без возврата иконки формата. */
+    private Optional<WinDef.HBITMAP> getBitmap(Pointer shellItem, int size, int flags) {
+        PointerByReference bitmapReference = new PointerByReference();
+        int result = invoke(shellItem, 3, shellItem, new SizeByValue(size, size), flags, bitmapReference);
+        if (result < 0 || bitmapReference.getValue() == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new WinDef.HBITMAP(bitmapReference.getValue()));
     }
 
     /**

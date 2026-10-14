@@ -9,30 +9,43 @@ import java.util.Properties;
 
 /** Сохраняет выбранные пользователем папки в Java properties рядом с программой. */
 public final class PropertiesSettingsRepository {
+    private static final String LEGACY_FILE_NAME = "yandex-preview-recovery.properties";
     private static final String SOURCE_KEY = "source.folder";
     private static final String DESTINATION_KEY = "destination.folder";
+    private static final String OVERWRITE_PREVIEWS_KEY = "previews.overwrite";
+    private static final String PARALLELISM_KEY = "processing.parallelism";
     private final Path file;
+    private final Path legacyFile;
 
     /** Использует {@code yandex-media-recovery.properties} рядом с программой. */
     public PropertiesSettingsRepository() {
-        this(ApplicationPaths.programDirectory().resolve("yandex-media-recovery.properties"));
+        this(ApplicationPaths.programDirectory().resolve("yandex-media-recovery.properties"),
+                ApplicationPaths.programDirectory().resolve(LEGACY_FILE_NAME));
     }
 
     PropertiesSettingsRepository(Path file) {
+        this(file, null);
+    }
+
+    PropertiesSettingsRepository(Path file, Path legacyFile) {
         this.file = file;
+        this.legacyFile = legacyFile;
     }
 
     /** Загружает сохранённые значения или возвращает значения по умолчанию. */
     public RecoverySettings load() {
         Properties properties = new Properties();
-        if (!Files.isRegularFile(file)) {
+        Path source = settingsFileToLoad();
+        if (source == null) {
             return defaults();
         }
-        try (InputStream input = Files.newInputStream(file)) {
+        try (InputStream input = Files.newInputStream(source)) {
             properties.load(input);
             return new RecoverySettings(
                     pathOrDefault(properties.getProperty(SOURCE_KEY), RecoverySettings.DEFAULT_SOURCE),
-                    pathOrDefault(properties.getProperty(DESTINATION_KEY), RecoverySettings.DEFAULT_DESTINATION));
+                    pathOrDefault(properties.getProperty(DESTINATION_KEY), RecoverySettings.DEFAULT_DESTINATION),
+                    Boolean.parseBoolean(properties.getProperty(OVERWRITE_PREVIEWS_KEY, "false")),
+                    parallelismOrDefault(properties.getProperty(PARALLELISM_KEY)));
         } catch (IOException | IllegalArgumentException exception) {
             return defaults();
         }
@@ -43,6 +56,8 @@ public final class PropertiesSettingsRepository {
         Properties properties = new Properties();
         properties.setProperty(SOURCE_KEY, settings.sourceFolder().toAbsolutePath().normalize().toString());
         properties.setProperty(DESTINATION_KEY, settings.destinationFolder().toAbsolutePath().normalize().toString());
+        properties.setProperty(OVERWRITE_PREVIEWS_KEY, Boolean.toString(settings.overwritePreviews()));
+        properties.setProperty(PARALLELISM_KEY, Integer.toString(settings.parallelism()));
         Path parent = file.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
@@ -53,10 +68,27 @@ public final class PropertiesSettingsRepository {
     }
 
     private RecoverySettings defaults() {
-        return new RecoverySettings(RecoverySettings.DEFAULT_SOURCE, RecoverySettings.DEFAULT_DESTINATION);
+        return new RecoverySettings(RecoverySettings.DEFAULT_SOURCE, RecoverySettings.DEFAULT_DESTINATION,
+                false, RecoverySettings.DEFAULT_PARALLELISM);
+    }
+
+    private Path settingsFileToLoad() {
+        if (Files.isRegularFile(file)) {
+            return file;
+        }
+        return legacyFile != null && Files.isRegularFile(legacyFile) ? legacyFile : null;
     }
 
     private Path pathOrDefault(String value, Path fallback) {
         return value == null || value.isBlank() ? fallback : Path.of(value);
+    }
+
+    private int parallelismOrDefault(String value) {
+        try {
+            int parallelism = value == null ? RecoverySettings.DEFAULT_PARALLELISM : Integer.parseInt(value);
+            return parallelism >= 1 && parallelism <= 10 ? parallelism : RecoverySettings.DEFAULT_PARALLELISM;
+        } catch (NumberFormatException exception) {
+            return RecoverySettings.DEFAULT_PARALLELISM;
+        }
     }
 }

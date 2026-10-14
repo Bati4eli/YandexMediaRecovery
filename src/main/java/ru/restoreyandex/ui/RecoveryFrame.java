@@ -4,6 +4,7 @@ import ru.restoreyandex.config.PropertiesSettingsRepository;
 import ru.restoreyandex.config.RecoverySettings;
 import ru.restoreyandex.config.ApplicationPaths;
 import ru.restoreyandex.domain.RecoveryEvent;
+import ru.restoreyandex.domain.RecoveryOptions;
 import ru.restoreyandex.domain.RecoveryReport;
 import ru.restoreyandex.recovery.CsvRecoveryLogger;
 import ru.restoreyandex.recovery.RecoveryListener;
@@ -11,6 +12,8 @@ import ru.restoreyandex.recovery.RecoveryService;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -28,9 +31,11 @@ import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Font;
 import java.awt.event.ActionEvent;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.IntStream;
 
 /** Главное окно для длительной операции восстановления. */
 public final class RecoveryFrame extends JFrame {
@@ -38,6 +43,9 @@ public final class RecoveryFrame extends JFrame {
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
     private final JTextArea logArea = new JTextArea();
+    private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью PREW_");
+    private final JComboBox<Integer> parallelismComboBox = new JComboBox<>(
+            IntStream.rangeClosed(1, 10).boxed().toArray(Integer[]::new));
     private final JButton startButton = new JButton("Начать восстановление");
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
@@ -48,6 +56,8 @@ public final class RecoveryFrame extends JFrame {
         RecoverySettings settings = settingsRepository.load();
         sourceField.setText(settings.sourceFolder().toString());
         destinationField.setText(settings.destinationFolder().toString());
+        overwritePreviewsCheckBox.setSelected(settings.overwritePreviews());
+        parallelismComboBox.setSelectedItem(settings.parallelism());
         initialize();
     }
 
@@ -58,6 +68,7 @@ public final class RecoveryFrame extends JFrame {
         sourceField.setEditable(false);
         destinationField.setEditable(false);
         logArea.setEditable(false);
+        logArea.setFont(logArea.getFont().deriveFont(Font.PLAIN, 18f));
         logArea.setLineWrap(true);
         logArea.setWrapStyleWord(true);
         progressBar.setStringPainted(true);
@@ -68,6 +79,19 @@ public final class RecoveryFrame extends JFrame {
         addFolderRow(folders, 0, "Откуда (исходная):", sourceField, event -> chooseFolder(sourceField, "Выберите исходную папку"));
         addFolderRow(folders, 1, "Куда (восстановить):", destinationField,
                 event -> chooseFolder(destinationField, "Выберите папку восстановления"));
+        JPanel options = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        options.add(overwritePreviewsCheckBox);
+        options.add(new JLabel("   Потоков: "));
+        options.add(parallelismComboBox);
+        overwritePreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
+        parallelismComboBox.addActionListener(event -> saveCurrentSettings());
+
+        GridBagConstraints optionConstraints = new GridBagConstraints();
+        optionConstraints.gridx = 1;
+        optionConstraints.gridy = 2;
+        optionConstraints.anchor = GridBagConstraints.WEST;
+        optionConstraints.insets = new Insets(4, 0, 4, 6);
+        folders.add(options, optionConstraints);
 
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
         controls.add(startButton);
@@ -119,11 +143,12 @@ public final class RecoveryFrame extends JFrame {
     private void startRecovery(ActionEvent ignored) {
         Path source = Path.of(sourceField.getText());
         Path destination = Path.of(destinationField.getText());
+        RecoveryOptions options = new RecoveryOptions(overwritePreviewsCheckBox.isSelected(), selectedParallelism());
         saveCurrentSettings();
         startButton.setEnabled(false);
         logArea.setText("Подготовка списка файлов…\n");
         progressBar.setIndeterminate(true);
-        new RecoveryWorker(source, destination).execute();
+        new RecoveryWorker(source, destination, options).execute();
     }
 
     private void updateProgress(RecoveryEvent event) {
@@ -131,32 +156,39 @@ public final class RecoveryFrame extends JFrame {
         progressBar.setMaximum(Math.max(event.total(), 1));
         progressBar.setValue(event.processed());
         progressBar.setString(event.processed() + " / " + event.total());
-        logArea.append(event.outcome().screenStatus() + " — " + event.source() + "\n" + event.message() + "\n");
+        logArea.append(event.outcome().screenStatus() + " — " + event.message() + " — " + event.source() + "\n");
         logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
     private void saveCurrentSettings() {
         try {
-            settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText())));
+            settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
+                    overwritePreviewsCheckBox.isSelected(), selectedParallelism()));
         } catch (Exception exception) {
             JOptionPane.showMessageDialog(this, "Не удалось сохранить настройки: " + exception.getMessage(),
                     "Настройки", JOptionPane.WARNING_MESSAGE);
         }
     }
 
+    private int selectedParallelism() {
+        return (Integer) parallelismComboBox.getSelectedItem();
+    }
+
     private final class RecoveryWorker extends SwingWorker<RecoveryReport, Void> {
         private final Path source;
         private final Path destination;
+        private final RecoveryOptions options;
 
-        private RecoveryWorker(Path source, Path destination) {
+        private RecoveryWorker(Path source, Path destination, RecoveryOptions options) {
             this.source = source;
             this.destination = destination;
+            this.options = options;
         }
 
         @Override
         protected RecoveryReport doInBackground() throws Exception {
             try (CsvRecoveryLogger csvLogger = new CsvRecoveryLogger(ApplicationPaths.programDirectory())) {
-                return recoveryService.recover(source, destination, new RecoveryListener() {
+                return recoveryService.recover(source, destination, options, new RecoveryListener() {
                     @Override
                     public void onStarted(int totalFiles) {
                         SwingUtilities.invokeLater(() -> {
@@ -165,6 +197,16 @@ public final class RecoveryFrame extends JFrame {
                             progressBar.setValue(0);
                             progressBar.setString("0 / " + totalFiles);
                             logArea.append("CSV-лог: " + csvLogger.file() + "\n");
+                        });
+                    }
+
+                    @Override
+                    public void onFileStarted(Path source, int processed, int totalFiles) {
+                        SwingUtilities.invokeLater(() -> {
+                            progressBar.setIndeterminate(false);
+                            progressBar.setMaximum(Math.max(totalFiles, 1));
+                            progressBar.setValue(Math.max(processed - 1, 0));
+                            progressBar.setString(processed + " / " + totalFiles + " — проверка");
                         });
                     }
 

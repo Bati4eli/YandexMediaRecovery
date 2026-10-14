@@ -70,6 +70,31 @@ class RecoveryPlannerTest {
     }
 
     @Test
+    void existingPreviewIsReplacedOnlyWhenTheOptionIsEnabled() throws Exception {
+        Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Path source = Files.writeString(sourceRoot.resolve("IMG_1.jpg"), "placeholder");
+        Files.writeString(destinationRoot.resolve("PREW_IMG_1.png"), "outdated preview");
+
+        RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, unreadableImage(), true);
+
+        assertEquals(RecoveryAction.WRITE_PREVIEW, plan.action());
+        assertEquals(destinationRoot.resolve("PREW_IMG_1.png"), plan.destination());
+    }
+
+    @Test
+    void originalDestinationIsNeverReplacedEvenWhenPreviewReplacementIsEnabled() throws Exception {
+        Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Path source = Files.writeString(sourceRoot.resolve("IMG_1.jpg"), "placeholder");
+        Files.writeString(destinationRoot.resolve("IMG_1.jpg"), "protected original");
+
+        RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, unreadableImage(), true);
+
+        assertEquals(RecoveryAction.SKIP_DESTINATION_EXISTS, plan.action());
+    }
+
+    @Test
     void unrelatedFilesAreIgnored() throws Exception {
         Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));

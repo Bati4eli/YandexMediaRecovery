@@ -5,6 +5,7 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.UUID;
 
 /** Записывает результаты через временный файл рядом с целью, не заменяя существующий файл. */
@@ -21,13 +22,21 @@ final class SafeFileWriter {
     }
 
     void writePreview(BufferedImage image, Path target) throws IOException {
+        writePreview(image, target, false);
+    }
+
+    /**
+     * Сохраняет PNG-превью. Замена разрешается только для заранее выбранного
+     * пути PREW_, поэтому оригиналы этим методом не затрагиваются.
+     */
+    void writePreview(BufferedImage image, Path target, boolean replaceExisting) throws IOException {
         prepareParent(target);
         Path temporary = temporarySibling(target);
         try {
             if (!ImageIO.write(image, "png", temporary.toFile())) {
                 throw new IOException("PNG writer is unavailable");
             }
-            moveWithoutReplacing(temporary, target);
+            movePreview(temporary, target, replaceExisting);
         } finally {
             Files.deleteIfExists(temporary);
         }
@@ -49,5 +58,13 @@ final class SafeFileWriter {
         // Намеренно не передаём REPLACE_EXISTING и ATOMIC_MOVE: при атомарном
         // перемещении замена существующей цели зависит от файлового провайдера.
         Files.move(temporary, target);
+    }
+
+    private void movePreview(Path temporary, Path target, boolean replaceExisting) throws IOException {
+        if (replaceExisting) {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+        } else {
+            moveWithoutReplacing(temporary, target);
+        }
     }
 }

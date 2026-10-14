@@ -1,6 +1,7 @@
 package ru.restoreyandex.recovery;
 
 import ru.restoreyandex.media.DefaultMediaInspector;
+import ru.restoreyandex.domain.RecoveryOptions;
 import ru.restoreyandex.domain.RecoveryReport;
 
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,23 @@ class RecoveryServiceTest {
 
         assertEquals(1, report.previewsSaved());
         assertEquals(Color.GREEN.getRGB(), ImageIO.read(destination.resolve("2011/PREW_lost.png").toFile()).getRGB(0, 0));
+    }
+
+    @Test
+    void replacesOnlyExistingPreviewWhenTheOptionIsEnabled() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        writeImage(destination.resolve("PREW_lost.png"), Color.RED);
+        BufferedImage preview = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
+        preview.setRGB(0, 0, Color.GREEN.getRGB());
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.of(preview), new SafeFileWriter());
+
+        RecoveryReport report = service.recover(source, destination, new RecoveryOptions(true, 1), new RecoveryListener() { });
+
+        assertEquals(1, report.previewsSaved());
+        assertEquals(Color.GREEN.getRGB(), ImageIO.read(destination.resolve("PREW_lost.png").toFile()).getRGB(0, 0));
     }
 
     private RecoveryService serviceWithNoPreview() {

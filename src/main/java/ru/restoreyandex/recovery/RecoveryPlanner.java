@@ -20,6 +20,15 @@ public final class RecoveryPlanner {
      * файл должен быть потомком {@code sourceRoot}.</p>
      */
     public RecoveryPlan plan(Path source, Path sourceRoot, Path destinationRoot, MediaInspector inspector) {
+        return plan(source, sourceRoot, destinationRoot, inspector, false);
+    }
+
+    /**
+     * Планирует восстановление с учётом разрешения на обновление только
+     * существующего PREW_-превью; оригинал в папке назначения всегда защищён.
+     */
+    public RecoveryPlan plan(Path source, Path sourceRoot, Path destinationRoot, MediaInspector inspector,
+                             boolean overwritePreviews) {
         Objects.requireNonNull(source);
         Objects.requireNonNull(sourceRoot);
         Objects.requireNonNull(destinationRoot);
@@ -36,7 +45,7 @@ public final class RecoveryPlanner {
         }
 
         Path previewTarget = originalTarget.resolveSibling(MediaExtensions.previewName(source));
-        if (Files.exists(originalTarget) || Files.exists(previewTarget)) {
+        if (Files.exists(originalTarget) || (Files.exists(previewTarget) && !overwritePreviews)) {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.SKIP_DESTINATION_EXISTS, hintedType);
         }
 
