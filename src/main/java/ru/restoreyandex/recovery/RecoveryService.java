@@ -18,8 +18,12 @@ import ru.restoreyandex.logging.ApplicationLogger;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -30,7 +34,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.time.Duration;
-import java.util.stream.Stream;
 
 /** Координирует рекурсивное планирование, проверку и безопасную запись восстановления. */
 public final class RecoveryService {
@@ -94,10 +97,7 @@ public final class RecoveryService {
         if (!Files.isDirectory(destinationRoot)) {
             throw new IOException("Папка назначения недоступна: " + destinationRoot);
         }
-        List<Path> files;
-        try (Stream<Path> stream = Files.walk(sourceRoot)) {
-            files = stream.filter(Files::isRegularFile).toList();
-        }
+        List<Path> files = collectSelectedFiles(sourceRoot, options);
         listener.onStarted(files.size());
         Counter counter = new Counter();
         MediaInspector runInspector = new ru.restoreyandex.media.TimedMediaInspector(inspector,
@@ -152,6 +152,39 @@ public final class RecoveryService {
             ApplicationLogger.error("Ошибка восстановления файла: " + source, exception);
             return event(source, RecoveryOutcome.NO_FILE, "Ошибка: " + conciseMessage(exception));
         }
+    }
+
+    /**
+     * Обходит только выбранные ветки. Исключённая папка не открывается вовсе;
+     * однако путь к явно включённой вложенной папке остаётся доступен.
+     */
+    private List<Path> collectSelectedFiles(Path sourceRoot, RecoveryOptions options) throws IOException {
+        List<Path> files = new ArrayList<>();
+        Files.walkFileTree(sourceRoot, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
+                if (!directory.equals(sourceRoot) && isSyncDirectory(directory)) {
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                return directory.equals(sourceRoot) || options.folderSelection().shouldTraverse(directory)
+                        ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
+                if (attributes.isRegularFile() && options.folderSelection().includes(file)) {
+                    files.add(file);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException exception) {
+                ApplicationLogger.error("Не удалось прочитать путь при обходе: " + file, exception);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return List.copyOf(files);
     }
 
     private RecoveryEvent copy(RecoveryPlan plan, boolean deleteLowerQualityPreviews, Counter counter) throws IOException {
@@ -299,6 +332,11 @@ public final class RecoveryService {
             throw new IOException(label + " не существует или недоступна: " + normalized);
         }
         return normalized;
+    }
+
+    private boolean isSyncDirectory(Path directory) {
+        Path name = directory.getFileName();
+        return name != null && ".sync".equalsIgnoreCase(name.toString());
     }
 
     private String conciseMessage(Exception exception) {

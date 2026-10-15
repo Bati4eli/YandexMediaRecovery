@@ -3,6 +3,8 @@ package ru.restoreyandex.recovery;
 import ru.restoreyandex.media.DefaultMediaInspector;
 import ru.restoreyandex.domain.RecoveryOptions;
 import ru.restoreyandex.domain.RecoveryReport;
+import ru.restoreyandex.domain.FolderSelection;
+import ru.restoreyandex.domain.FolderSelectionRule;
 import ru.restoreyandex.preview.CloudPreviewExtractor;
 
 import org.junit.jupiter.api.Test;
@@ -14,6 +16,7 @@ import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -33,6 +36,40 @@ class RecoveryServiceTest {
 
         assertEquals(1, report.copied());
         assertNotNull(ImageIO.read(destination.resolve("album/photo.png").toFile()));
+    }
+
+    @Test
+    void recoversOnlyFilesFromSelectedFolderBranchesWithPathsRelativeToDiskRoot() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path included = Files.createDirectories(source.resolve("family/2011"));
+        Path excluded = Files.createDirectories(source.resolve("work"));
+        Path destination = temporaryDirectory.resolve("destination");
+        writeImage(included.resolve("photo.png"), Color.BLUE);
+        writeImage(excluded.resolve("report.png"), Color.RED);
+        RecoveryOptions options = new RecoveryOptions(false, true, 1,
+                new FolderSelection(List.of(new FolderSelectionRule(excluded, false))));
+
+        RecoveryReport report = serviceWithNoPreview().recover(source, destination, options, new RecoveryListener() { });
+
+        assertEquals(1, report.copied());
+        assertNotNull(ImageIO.read(destination.resolve("family/2011/photo.png").toFile()));
+        assertEquals(false, Files.exists(destination.resolve("work/report.png")));
+    }
+
+    @Test
+    void skipsHiddenSyncFolderDuringRecovery() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path visible = Files.createDirectories(source.resolve("family"));
+        Path sync = Files.createDirectories(source.resolve(".sync/cache"));
+        Path destination = temporaryDirectory.resolve("destination");
+        writeImage(visible.resolve("photo.png"), Color.BLUE);
+        writeImage(sync.resolve("internal.png"), Color.RED);
+
+        RecoveryReport report = serviceWithNoPreview().recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(1, report.scanned());
+        assertNotNull(ImageIO.read(destination.resolve("family/photo.png").toFile()));
+        assertEquals(false, Files.exists(destination.resolve(".sync/cache/internal.png")));
     }
 
     @Test

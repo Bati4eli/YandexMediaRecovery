@@ -22,6 +22,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
@@ -44,12 +45,13 @@ public final class RecoveryFrame extends JFrame {
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
     private final JTextArea logArea = new JTextArea();
+    private final FolderSelectionTree folderSelectionTree = new FolderSelectionTree();
     private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью");
     private final JCheckBox deleteLowerQualityPreviewsCheckBox = new JCheckBox("Удалять менее качественные превью");
     private final JComboBox<Integer> parallelismComboBox = new JComboBox<>(
             IntStream.rangeClosed(1, 10).boxed().toArray(Integer[]::new));
     private final JButton yandexLoginButton = new JButton("Войти в Яндекс Диск…");
-    private final JButton startButton = new JButton("Начать восстановление");
+    private final JButton startButton = new JButton("▶️ Начать восстановление");
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
 
@@ -67,7 +69,7 @@ public final class RecoveryFrame extends JFrame {
 
     private void initialize() {
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setMinimumSize(new Dimension(820, 500));
+        setMinimumSize(new Dimension(820, 720));
         setLocationByPlatform(true);
         sourceField.setEditable(false);
         destinationField.setEditable(false);
@@ -102,7 +104,6 @@ public final class RecoveryFrame extends JFrame {
 
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
         controls.add(yandexLoginButton);
-        controls.add(startButton);
         yandexLoginButton.addActionListener(event -> openYandexLogin());
         startButton.addActionListener(this::startRecovery);
 
@@ -110,12 +111,19 @@ public final class RecoveryFrame extends JFrame {
         top.add(folders, BorderLayout.CENTER);
         top.add(controls, BorderLayout.SOUTH);
 
+        JSplitPane workspace = new JSplitPane(JSplitPane.VERTICAL_SPLIT, folderSelectionTree, new JScrollPane(logArea));
+        workspace.setResizeWeight(0.45);
+        workspace.setDividerLocation(255);
         JPanel center = new JPanel(new BorderLayout(0, 8));
         center.setBorder(BorderFactory.createEmptyBorder(4, 12, 12, 12));
         center.add(progressBar, BorderLayout.NORTH);
-        center.add(new JScrollPane(logArea), BorderLayout.CENTER);
+        center.add(workspace, BorderLayout.CENTER);
+        JPanel recoveryControl = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        recoveryControl.add(startButton);
+        center.add(recoveryControl, BorderLayout.SOUTH);
         add(top, BorderLayout.NORTH);
         add(center, BorderLayout.CENTER);
+        reloadFolderTree(Path.of(sourceField.getText()));
         pack();
     }
 
@@ -144,7 +152,11 @@ public final class RecoveryFrame extends JFrame {
         chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         chooser.setAcceptAllFileFilterUsed(false);
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            field.setText(chooser.getSelectedFile().toPath().toString());
+            Path folder = chooser.getSelectedFile().toPath();
+            field.setText(folder.toString());
+            if (field == sourceField) {
+                reloadFolderTree(folder);
+            }
             saveCurrentSettings();
         }
     }
@@ -153,7 +165,7 @@ public final class RecoveryFrame extends JFrame {
         Path source = Path.of(sourceField.getText());
         Path destination = Path.of(destinationField.getText());
         RecoveryOptions options = new RecoveryOptions(overwritePreviewsCheckBox.isSelected(),
-                deleteLowerQualityPreviewsCheckBox.isSelected(), selectedParallelism());
+                deleteLowerQualityPreviewsCheckBox.isSelected(), selectedParallelism(), folderSelectionTree.selection());
         saveCurrentSettings();
         startButton.setEnabled(false);
         yandexLoginButton.setEnabled(false);
@@ -219,6 +231,14 @@ public final class RecoveryFrame extends JFrame {
 
     private int selectedParallelism() {
         return (Integer) parallelismComboBox.getSelectedItem();
+    }
+
+    private void reloadFolderTree(Path sourceRoot) {
+        try {
+            folderSelectionTree.reload(sourceRoot);
+        } catch (Exception exception) {
+            ApplicationLogger.error("Не удалось построить дерево папок Яндекс Диска", exception);
+        }
     }
 
     private final class RecoveryWorker extends SwingWorker<RecoveryReport, Void> {
