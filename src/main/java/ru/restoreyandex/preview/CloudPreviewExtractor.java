@@ -21,4 +21,12 @@ public interface CloudPreviewExtractor {
     default void openLogin() throws IOException {
         throw new IOException("Вход в Яндекс Диск недоступен для этого источника превью");
     }
+
+    /** Включает или выключает видимое окно Chrome для диагностики маршрута файлов. */
+    default void configureBrowserDebugMode(boolean enabled) {
+    }
+
+    /** Немедленно прекращает текущую работу управляемого браузерного канала. */
+    default void close() {
+    }
 }

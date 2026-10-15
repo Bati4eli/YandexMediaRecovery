@@ -40,6 +40,7 @@ import java.awt.event.ActionEvent;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Path;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.IntStream;
 
@@ -52,12 +53,15 @@ public final class RecoveryFrame extends JFrame {
     private final FolderSelectionTree folderSelectionTree = new FolderSelectionTree();
     private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью");
     private final JCheckBox deleteLowerQualityPreviewsCheckBox = new JCheckBox("Удалять менее качественные превью");
+    private final JCheckBox browserDebugModeCheckBox = new JCheckBox("🐞 Отладка браузера (1 поток)");
     private final JComboBox<Integer> parallelismComboBox = new JComboBox<>(
             IntStream.rangeClosed(1, 10).boxed().toArray(Integer[]::new));
     private final JButton yandexLoginButton = new JButton("Войти в Яндекс Диск…");
     private final JButton startButton = new JButton("▶️ Начать восстановление");
+    private final JButton stopButton = new JButton("⏹ Остановить восстановление");
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
+    private RecoveryWorker activeRecoveryWorker;
 
     /** Создаёт окно и подставляет ранее сохранённые папки, если они есть. */
     public RecoveryFrame() {
@@ -68,6 +72,7 @@ public final class RecoveryFrame extends JFrame {
         overwritePreviewsCheckBox.setSelected(settings.overwritePreviews());
         deleteLowerQualityPreviewsCheckBox.setSelected(settings.deleteLowerQualityPreviews());
         parallelismComboBox.setSelectedItem(settings.parallelism());
+        browserDebugModeCheckBox.setSelected(settings.browserDebugMode());
         setApplicationIcon();
         initialize();
     }
@@ -113,11 +118,17 @@ public final class RecoveryFrame extends JFrame {
         JPanel options = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         options.add(overwritePreviewsCheckBox);
         options.add(deleteLowerQualityPreviewsCheckBox);
+        options.add(browserDebugModeCheckBox);
         options.add(new JLabel("   Потоков: "));
         options.add(parallelismComboBox);
         overwritePreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
         deleteLowerQualityPreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
         parallelismComboBox.addActionListener(event -> saveCurrentSettings());
+        browserDebugModeCheckBox.addActionListener(event -> {
+            applyBrowserDebugMode();
+            saveCurrentSettings();
+        });
+        applyBrowserDebugMode();
 
         GridBagConstraints optionConstraints = new GridBagConstraints();
         optionConstraints.gridx = 1;
@@ -144,6 +155,9 @@ public final class RecoveryFrame extends JFrame {
         center.add(workspace, BorderLayout.CENTER);
         JPanel recoveryControl = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         recoveryControl.add(startButton);
+        recoveryControl.add(stopButton);
+        stopButton.setEnabled(false);
+        stopButton.addActionListener(event -> stopRecovery());
         center.add(recoveryControl, BorderLayout.SOUTH);
         add(top, BorderLayout.NORTH);
         add(center, BorderLayout.CENTER);
@@ -189,13 +203,35 @@ public final class RecoveryFrame extends JFrame {
         Path source = Path.of(sourceField.getText());
         Path destination = Path.of(destinationField.getText());
         RecoveryOptions options = new RecoveryOptions(overwritePreviewsCheckBox.isSelected(),
-                deleteLowerQualityPreviewsCheckBox.isSelected(), selectedParallelism(), folderSelectionTree.selection());
+                deleteLowerQualityPreviewsCheckBox.isSelected(), selectedParallelism(),
+                browserDebugModeCheckBox.isSelected(), folderSelectionTree.selection());
         saveCurrentSettings();
         startButton.setEnabled(false);
         yandexLoginButton.setEnabled(false);
+        stopButton.setEnabled(true);
         replaceLog("Подготовка списка файлов…\n");
         progressBar.setIndeterminate(true);
-        new RecoveryWorker(source, destination, options).execute();
+        activeRecoveryWorker = new RecoveryWorker(source, destination, options);
+        activeRecoveryWorker.execute();
+    }
+
+    /** Останавливает рабочие задачи и немедленно закрывает фоновый Chrome. */
+    private void stopRecovery() {
+        if (activeRecoveryWorker == null) {
+            return;
+        }
+        stopButton.setEnabled(false);
+        appendLog("⏹ Останавливаю восстановление и закрываю Chrome…\n");
+        recoveryService.cancel();
+    }
+
+    /** В отладке Chrome видим и обращение к нему всегда выполняется в один поток. */
+    private void applyBrowserDebugMode() {
+        boolean debugMode = browserDebugModeCheckBox.isSelected();
+        if (debugMode) {
+            parallelismComboBox.setSelectedItem(1);
+        }
+        parallelismComboBox.setEnabled(!debugMode);
     }
 
     /** Открывает отдельное окно Chrome; данные входа пользователь вводит только в браузере. */
@@ -245,7 +281,7 @@ public final class RecoveryFrame extends JFrame {
         try {
             settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
                     overwritePreviewsCheckBox.isSelected(), deleteLowerQualityPreviewsCheckBox.isSelected(),
-                    selectedParallelism()));
+                    selectedParallelism(), browserDebugModeCheckBox.isSelected()));
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось сохранить настройки", exception);
             JOptionPane.showMessageDialog(this, "Не удалось сохранить настройки: " + exception.getMessage(),
@@ -314,6 +350,8 @@ public final class RecoveryFrame extends JFrame {
         protected void done() {
             startButton.setEnabled(true);
             yandexLoginButton.setEnabled(true);
+            stopButton.setEnabled(false);
+            activeRecoveryWorker = null;
             try {
                 RecoveryReport report = get();
                 appendLog("\n" + report.toDisplayString() + "\n");
@@ -322,6 +360,8 @@ public final class RecoveryFrame extends JFrame {
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
                 ApplicationLogger.error("Ожидание восстановления прервано", exception);
+            } catch (CancellationException exception) {
+                appendLog("⏹ Восстановление остановлено пользователем.\n");
             } catch (ExecutionException exception) {
                 String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
                 ApplicationLogger.error("Восстановление остановлено", exception.getCause() == null ? exception : exception.getCause());

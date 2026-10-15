@@ -1,6 +1,9 @@
 package ru.restoreyandex.recovery;
 
 import ru.restoreyandex.media.DefaultMediaInspector;
+import ru.restoreyandex.media.MediaInspector;
+import ru.restoreyandex.domain.MediaInspection;
+import ru.restoreyandex.domain.MediaType;
 import ru.restoreyandex.domain.RecoveryOptions;
 import ru.restoreyandex.domain.RecoveryReport;
 import ru.restoreyandex.domain.FolderSelection;
@@ -18,9 +21,18 @@ import java.nio.file.Path;
 import java.util.Optional;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RecoveryServiceTest {
     @TempDir
@@ -150,6 +162,43 @@ class RecoveryServiceTest {
     }
 
     @Test
+    void doesNotTreatTinyIncorrectlyNamedPrewAsAHighQualityPreview() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        writeSizedImage(destination.resolve("PREW_lost.png"), 160, 120, Color.RED);
+        AtomicInteger browserRequests = new AtomicInteger();
+        CloudPreviewExtractor cloud = relativePath -> {
+            browserRequests.incrementAndGet();
+            return Optional.of(image(Color.BLUE));
+        };
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.empty(), cloud, new SafeFileWriter());
+
+        service.recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(1, browserRequests.get());
+        assertNotNull(ImageIO.read(destination.resolve("WEBPV_lost.png").toFile()));
+        assertFalse(Files.exists(destination.resolve("PREW_lost.png")));
+    }
+
+    @Test
+    void replacesTinyIncorrectlyNamedPrewWithMiniPreviewWhenNoLargeSourceIsAvailable() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        writeSizedImage(destination.resolve("PREW_lost.png"), 160, 120, Color.RED);
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.empty(), ignored -> Optional.empty(),
+                ignored -> Optional.of(image(Color.MAGENTA)), new SafeFileWriter());
+
+        service.recover(source, destination, new RecoveryListener() { });
+
+        assertNotNull(ImageIO.read(destination.resolve("MINIPV_lost.png").toFile()));
+        assertFalse(Files.exists(destination.resolve("PREW_lost.png")));
+    }
+
+    @Test
     void savesMiniPreviewWhenLargeExplorerAndBrowserPreviewsAreUnavailable() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = temporaryDirectory.resolve("destination");
@@ -240,13 +289,138 @@ class RecoveryServiceTest {
         assertEquals(Color.GREEN.getRGB(), ImageIO.read(destination.resolve("PREW_lost.png").toFile()).getRGB(0, 0));
     }
 
+    @Test
+    void processesSeveralFilesFromOneFolderConcurrently() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source/album"));
+        Path destination = temporaryDirectory.resolve("destination");
+        Files.writeString(source.resolve("one.jpg"), "cloud placeholder");
+        Files.writeString(source.resolve("two.jpg"), "cloud placeholder");
+        CountDownLatch inspectionsStarted = new CountDownLatch(2);
+        CountDownLatch allowInspectionsToFinish = new CountDownLatch(1);
+        MediaInspector inspector = ignored -> {
+            inspectionsStarted.countDown();
+            await(allowInspectionsToFinish);
+            return MediaInspection.unreadable(MediaType.IMAGE);
+        };
+        RecoveryService service = serviceWith(inspector);
+
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            Future<RecoveryReport> recovery = caller.submit(() -> service.recover(source.getParent(), destination,
+                    new RecoveryOptions(false, true, 2), new RecoveryListener() { }));
+
+            assertTrue(inspectionsStarted.await(1, TimeUnit.SECONDS));
+            allowInspectionsToFinish.countDown();
+            recovery.get(2, TimeUnit.SECONDS);
+        } finally {
+            caller.shutdownNow();
+        }
+    }
+
+    @Test
+    void completesCurrentFolderBeforeStartingFilesFromNextFolder() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path firstFolder = Files.createDirectories(source.resolve("a-current"));
+        Path nextFolder = Files.createDirectories(source.resolve("z-next"));
+        Path destination = temporaryDirectory.resolve("destination");
+        for (int index = 1; index <= 3; index++) {
+            Files.writeString(firstFolder.resolve("photo-%d.jpg".formatted(index)), "cloud placeholder");
+        }
+        Files.writeString(nextFolder.resolve("photo.jpg"), "cloud placeholder");
+        CountDownLatch firstTwoStarted = new CountDownLatch(2);
+        CountDownLatch thirdStarted = new CountDownLatch(1);
+        CountDownLatch nextFolderStarted = new CountDownLatch(1);
+        Semaphore permits = new Semaphore(0);
+        AtomicInteger firstFolderInspections = new AtomicInteger();
+        MediaInspector inspector = file -> {
+            if (file.startsWith(firstFolder)) {
+                int ordinal = firstFolderInspections.incrementAndGet();
+                if (ordinal <= 2) {
+                    firstTwoStarted.countDown();
+                } else {
+                    thirdStarted.countDown();
+                }
+                acquire(permits);
+            } else {
+                nextFolderStarted.countDown();
+            }
+            return MediaInspection.unreadable(MediaType.IMAGE);
+        };
+        RecoveryService service = serviceWith(inspector);
+
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            Future<RecoveryReport> recovery = caller.submit(() -> service.recover(source, destination,
+                    new RecoveryOptions(false, true, 2), new RecoveryListener() { }));
+            assertTrue(firstTwoStarted.await(1, TimeUnit.SECONDS));
+            permits.release();
+            assertTrue(thirdStarted.await(1, TimeUnit.SECONDS));
+            permits.release();
+
+            assertFalse(nextFolderStarted.await(300, TimeUnit.MILLISECONDS));
+            permits.release();
+            recovery.get(2, TimeUnit.SECONDS);
+        } finally {
+            caller.shutdownNow();
+        }
+    }
+
+    @Test
+    void cancelClosesTheActiveBrowserPreviewChannel() {
+        AtomicBoolean browserClosed = new AtomicBoolean();
+        CloudPreviewExtractor browser = new CloudPreviewExtractor() {
+            @Override
+            public Optional<BufferedImage> extract(Path relativePath) {
+                return Optional.empty();
+            }
+
+            @Override
+            public void close() {
+                browserClosed.set(true);
+            }
+        };
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.empty(), browser, ignored -> Optional.empty(), new SafeFileWriter());
+
+        service.cancel();
+
+        assertTrue(browserClosed.get());
+    }
+
     private RecoveryService serviceWithNoPreview() {
         return new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
                 ignored -> Optional.empty(), new SafeFileWriter());
     }
 
+    private RecoveryService serviceWith(MediaInspector inspector) {
+        return new RecoveryService(new RecoveryPlanner(), inspector,
+                ignored -> Optional.empty(), ignored -> Optional.empty(), ignored -> Optional.empty(), new SafeFileWriter());
+    }
+
+    private void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void acquire(Semaphore semaphore) {
+        try {
+            semaphore.acquire();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private void writeImage(Path path, Color color) throws Exception {
         BufferedImage image = image(color);
+        ImageIO.write(image, "png", path.toFile());
+    }
+
+    private void writeSizedImage(Path path, int width, int height, Color color) throws Exception {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        image.setRGB(0, 0, color.getRGB());
         ImageIO.write(image, "png", path.toFile());
     }
 

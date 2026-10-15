@@ -29,7 +29,7 @@ import java.util.concurrent.TimeoutException;
  * новые файлы не создают сотни потоков: они немедленно считаются недоступными,
  * но восстановление их кэшированных миниатюр продолжается.</p>
  */
-public final class TimedMediaInspector implements MediaInspector {
+public final class TimedMediaInspector implements MediaInspector, AutoCloseable {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(8);
     private static final int DEFAULT_MAXIMUM_WORKERS = 2;
 
@@ -70,7 +70,7 @@ public final class TimedMediaInspector implements MediaInspector {
         try {
             task = executor.submit(() -> delegate.inspect(file));
         } catch (RejectedExecutionException exception) {
-            ApplicationLogger.error("Пул проверки медиа исчерпан: " + file, exception);
+            ApplicationLogger.info("Проверка оригинала пропущена; сразу ищу превью: " + file);
             return MediaInspection.unreadable(mediaType);
         }
         try {
@@ -104,5 +104,11 @@ public final class TimedMediaInspector implements MediaInspector {
             thread.setDaemon(true);
             return thread;
         };
+    }
+
+    /** Прерывает все проверки оригиналов при отмене восстановления. */
+    @Override
+    public void close() {
+        executor.shutdownNow();
     }
 }

@@ -69,6 +69,7 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
     private static final int BIGGER_SIZE_OK = 0x1;
     private static final int HIGH_RESOLUTION_SIZE = 2048;
     private static final int MINIATURE_SIZE = 512;
+    private static final int MINIMUM_LARGE_PREVIEW_EDGE = 1024;
     private static final int DIB_RGB_COLORS = 0;
     private static final int BI_RGB = 0;
 
@@ -89,7 +90,24 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
      * сохранена как качественное {@code PREW_}-превью.
      */
     public Optional<BufferedImage> extractLarge(Path file) {
-        return extract(file, HIGH_RESOLUTION_SIZE, THUMBNAIL_ONLY | IN_CACHE_ONLY | BIGGER_SIZE_OK);
+        return extract(file, HIGH_RESOLUTION_SIZE, THUMBNAIL_ONLY | IN_CACHE_ONLY | BIGGER_SIZE_OK)
+                .filter(image -> {
+                    if (isLargePreview(image)) {
+                        return true;
+                    }
+                    ApplicationLogger.info("Windows Explorer вернул маленькую обложку вместо большого превью: "
+                            + file + " — " + image.getWidth() + "x" + image.getHeight());
+                    return false;
+                });
+    }
+
+    /**
+     * Отличает большое превью от обложки: длина большей стороны должна быть не
+     * менее 1024 пикселей. Например, кэшированный результат 160×120 нельзя
+     * помечать {@code PREW_}: после него ещё нужно запросить {@code WEBPV_}.
+     */
+    public static boolean isLargePreview(BufferedImage image) {
+        return Math.max(image.getWidth(), image.getHeight()) >= MINIMUM_LARGE_PREVIEW_EDGE;
     }
 
     /**

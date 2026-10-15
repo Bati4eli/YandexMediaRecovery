@@ -4,10 +4,16 @@ import java.nio.file.Path;
 
 /** Последние папки и параметры, выбранные пользователем для восстановления. */
 public record RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
-                               boolean deleteLowerQualityPreviews, int parallelism) {
+                               boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode) {
     /** Создаёт настройки со включённым удалением превью худшего качества. */
     public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews, int parallelism) {
-        this(sourceFolder, destinationFolder, overwritePreviews, true, parallelism);
+        this(sourceFolder, destinationFolder, overwritePreviews, true, parallelism, false);
+    }
+
+    /** Создаёт настройки без отладочного показа браузера для старых вызовов. */
+    public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
+                            boolean deleteLowerQualityPreviews, int parallelism) {
+        this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism, false);
     }
     /** Типовой путь Яндекс Диска внутри домашней папки текущего пользователя. */
     public static final Path DEFAULT_SOURCE = Path.of(System.getProperty("user.home"), "Yandex.Disk");

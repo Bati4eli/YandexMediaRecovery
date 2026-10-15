@@ -9,6 +9,7 @@ import ru.restoreyandex.domain.RecoveryReport;
 import ru.restoreyandex.media.DefaultMediaInspector;
 import ru.restoreyandex.media.MediaExtensions;
 import ru.restoreyandex.media.MediaInspector;
+import ru.restoreyandex.media.TimedMediaInspector;
 import ru.restoreyandex.preview.PreviewExtractor;
 import ru.restoreyandex.preview.WindowsShellPreviewExtractor;
 import ru.restoreyandex.preview.CloudPreviewExtractor;
@@ -17,6 +18,7 @@ import ru.restoreyandex.logging.ApplicationLogger;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import javax.imageio.ImageIO;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -24,7 +26,10 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
@@ -32,7 +37,9 @@ import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.time.Duration;
 
 /** Координирует рекурсивное планирование, проверку и безопасную запись восстановления. */
@@ -43,6 +50,9 @@ public final class RecoveryService {
     private final CloudPreviewExtractor cloudPreviewExtractor;
     private final PreviewExtractor miniPreviewExtractor;
     private final SafeFileWriter fileWriter;
+    private volatile ExecutorService activeRecoveryExecutor;
+    private volatile TimedMediaInspector activeTimedInspector;
+    private final AtomicBoolean cancellationRequested = new AtomicBoolean();
 
     /** Создаёт сервис восстановления для Windows. */
     public RecoveryService() {
@@ -78,6 +88,23 @@ public final class RecoveryService {
     }
 
     /**
+     * Немедленно останавливает текущий запуск: отменяет рабочие задачи,
+     * прерывает ограниченную проверку оригиналов и закрывает Chrome.
+     */
+    public void cancel() {
+        cancellationRequested.set(true);
+        ExecutorService executor = activeRecoveryExecutor;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+        TimedMediaInspector timedInspector = activeTimedInspector;
+        if (timedInspector != null) {
+            timedInspector.close();
+        }
+        cloudPreviewExtractor.close();
+    }
+
+    /**
      * Восстанавливает все обычные файлы внутри исходной папки. Ошибка одного
      * файла фиксируется в результате и не останавливает остальные файлы.
      */
@@ -91,35 +118,34 @@ public final class RecoveryService {
      */
     public RecoveryReport recover(Path sourceFolder, Path destinationFolder, RecoveryOptions options,
                                   RecoveryListener listener) throws IOException {
+        cancellationRequested.set(false);
         Path sourceRoot = requireDirectory(sourceFolder, "Исходная папка");
         Path destinationRoot = destinationFolder.toAbsolutePath().normalize();
         Files.createDirectories(destinationRoot);
         if (!Files.isDirectory(destinationRoot)) {
             throw new IOException("Папка назначения недоступна: " + destinationRoot);
         }
-        List<Path> files = collectSelectedFiles(sourceRoot, options);
-        listener.onStarted(files.size());
+        cloudPreviewExtractor.configureBrowserDebugMode(options.browserDebugMode());
+        List<FolderFiles> folders = collectSelectedFolderFiles(sourceRoot, options);
+        int totalFiles = folders.stream().mapToInt(folder -> folder.files().size()).sum();
+        listener.onStarted(totalFiles);
         Counter counter = new Counter();
-        MediaInspector runInspector = new ru.restoreyandex.media.TimedMediaInspector(inspector,
+        TimedMediaInspector runInspector = new TimedMediaInspector(inspector,
                 Duration.ofSeconds(8), options.parallelism());
         ExecutorService executor = Executors.newFixedThreadPool(options.parallelism());
+        activeTimedInspector = runInspector;
+        activeRecoveryExecutor = executor;
         try {
-            ExecutorCompletionService<IndexedEvent> completion = new ExecutorCompletionService<>(executor);
-            for (int index = 0; index < files.size(); index++) {
-                Path source = files.get(index);
-                int ordinal = index + 1;
-                completion.submit(() -> {
-                    listener.onFileStarted(source, ordinal, files.size());
-                    return new IndexedEvent(source, recoverOne(source, sourceRoot, destinationRoot,
-                            runInspector, options, counter));
-                });
-            }
-            for (int completed = 1; completed <= files.size(); completed++) {
-                Future<IndexedEvent> future = completion.take();
-                IndexedEvent result = future.get();
-                RecoveryEvent raw = result.event();
-                listener.onFileProcessed(new RecoveryEvent(completed, files.size(), result.source(),
-                        raw.outcome(), raw.message()));
+            int submitted = 0;
+            int completed = 0;
+            for (FolderFiles folder : folders) {
+                if (cancellationRequested.get()) {
+                    break;
+                }
+                FolderProgress progress = processFolder(folder, submitted, completed, totalFiles, sourceRoot,
+                        destinationRoot, runInspector, options, counter, listener, executor);
+                submitted = progress.submitted();
+                completed = progress.completed();
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
@@ -131,6 +157,13 @@ public final class RecoveryService {
             throw new IOException("Сбой задачи восстановления", exception.getCause());
         } finally {
             executor.shutdownNow();
+            runInspector.close();
+            if (activeRecoveryExecutor == executor) {
+                activeRecoveryExecutor = null;
+            }
+            if (activeTimedInspector == runInspector) {
+                activeTimedInspector = null;
+            }
         }
         return counter.toReport();
     }
@@ -158,22 +191,30 @@ public final class RecoveryService {
      * Обходит только выбранные ветки. Исключённая папка не открывается вовсе;
      * однако путь к явно включённой вложенной папке остаётся доступен.
      */
-    private List<Path> collectSelectedFiles(Path sourceRoot, RecoveryOptions options) throws IOException {
-        List<Path> files = new ArrayList<>();
+    /**
+     * Единственный основной обходчик строит упорядоченные батчи по папкам.
+     * Рабочие потоки получают файлы только одной папки за раз, поэтому новая
+     * папка не начинает восстановление, пока не завершилась предыдущая.
+     */
+    private List<FolderFiles> collectSelectedFolderFiles(Path sourceRoot, RecoveryOptions options) throws IOException {
+        Map<Path, List<Path>> filesByFolder = new LinkedHashMap<>();
         Files.walkFileTree(sourceRoot, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
                 if (!directory.equals(sourceRoot) && isSyncDirectory(directory)) {
                     return FileVisitResult.SKIP_SUBTREE;
                 }
-                return directory.equals(sourceRoot) || options.folderSelection().shouldTraverse(directory)
-                        ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
+                if (!directory.equals(sourceRoot) && !options.folderSelection().shouldTraverse(directory)) {
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                filesByFolder.putIfAbsent(directory, new ArrayList<>());
+                return FileVisitResult.CONTINUE;
             }
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
                 if (attributes.isRegularFile() && options.folderSelection().includes(file)) {
-                    files.add(file);
+                    filesByFolder.computeIfAbsent(file.getParent(), ignored -> new ArrayList<>()).add(file);
                 }
                 return FileVisitResult.CONTINUE;
             }
@@ -184,7 +225,53 @@ public final class RecoveryService {
                 return FileVisitResult.CONTINUE;
             }
         });
-        return List.copyOf(files);
+        return filesByFolder.entrySet().stream()
+                .filter(entry -> !entry.getValue().isEmpty())
+                .sorted(Map.Entry.comparingByKey(Comparator.comparing(Path::toString, String.CASE_INSENSITIVE_ORDER)))
+                .map(entry -> new FolderFiles(entry.getKey(), entry.getValue().stream()
+                        .sorted(Comparator.comparing(Path::toString, String.CASE_INSENSITIVE_ORDER)).toList()))
+                .toList();
+    }
+
+    /** Выполняет файлы одной папки параллельно и возвращает счётчики общего прогресса. */
+    private FolderProgress processFolder(FolderFiles folder, int submitted, int completed, int totalFiles,
+                                         Path sourceRoot, Path destinationRoot, MediaInspector runInspector,
+                                         RecoveryOptions options, Counter counter, RecoveryListener listener,
+                                         ExecutorService executor) throws InterruptedException, ExecutionException {
+        ExecutorCompletionService<IndexedEvent> completion = new ExecutorCompletionService<>(executor);
+        int nextSubmitted = submitted;
+        for (Path source : folder.files()) {
+            if (cancellationRequested.get()) {
+                break;
+            }
+            int ordinal = ++nextSubmitted;
+            try {
+                completion.submit(() -> {
+                    listener.onFileStarted(source, ordinal, totalFiles);
+                    return new IndexedEvent(source, recoverOne(source, sourceRoot, destinationRoot,
+                            runInspector, options, counter));
+                });
+            } catch (RejectedExecutionException exception) {
+                if (!cancellationRequested.get()) {
+                    throw exception;
+                }
+                break;
+            }
+        }
+        int nextCompleted = completed;
+        int submittedInFolder = nextSubmitted - submitted;
+        for (int index = 0; index < submittedInFolder && !cancellationRequested.get();) {
+            Future<IndexedEvent> completedFuture = completion.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (completedFuture == null) {
+                continue;
+            }
+            IndexedEvent result = completedFuture.get();
+            RecoveryEvent raw = result.event();
+            listener.onFileProcessed(new RecoveryEvent(++nextCompleted, totalFiles, result.source(),
+                    raw.outcome(), raw.message()));
+            index++;
+        }
+        return new FolderProgress(nextSubmitted, nextCompleted);
     }
 
     private RecoveryEvent copy(RecoveryPlan plan, boolean deleteLowerQualityPreviews, Counter counter) throws IOException {
@@ -210,14 +297,18 @@ public final class RecoveryService {
         Path webTarget = previewTarget(plan, MediaExtensions.webPreviewName(plan.source()));
         Path explorerTarget = previewTarget(plan, MediaExtensions.previewName(plan.source()));
         Path miniTarget = previewTarget(plan, MediaExtensions.miniPreviewName(plan.source()));
+        boolean usableExplorerPreview = hasUsableExplorerPreview(explorerTarget);
+        boolean misclassifiedExplorerPreview = Files.isRegularFile(explorerTarget) && !usableExplorerPreview;
         if (Files.exists(webTarget)) {
             return existingPreview(plan, RecoveryOutcome.WEB_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
-        if (Files.exists(explorerTarget) && !options.overwritePreviews()) {
+        if (usableExplorerPreview && !options.overwritePreviews()) {
             return existingPreview(plan, RecoveryOutcome.EXPLORER_PREVIEW_SAVED,
                     options.deleteLowerQualityPreviews(), counter);
         }
         if (Files.exists(miniTarget) && !options.overwritePreviews()) {
+            deleteMisclassifiedExplorerPreview(explorerTarget, misclassifiedExplorerPreview,
+                    options.deleteLowerQualityPreviews(), counter);
             return existingPreview(plan, RecoveryOutcome.MINI_PREVIEW_SAVED,
                     options.deleteLowerQualityPreviews(), counter);
         }
@@ -233,17 +324,57 @@ public final class RecoveryService {
             return savePreview(plan.source(), webPreview.get(), webTarget, options.overwritePreviews(),
                     RecoveryOutcome.WEB_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
-        if (Files.exists(explorerTarget)) {
+        if (usableExplorerPreview) {
             return existingPreview(plan, RecoveryOutcome.EXPLORER_PREVIEW_SAVED,
                     options.deleteLowerQualityPreviews(), counter);
         }
         Optional<BufferedImage> miniPreview = miniPreviewExtractor.extract(plan.source());
         if (miniPreview.isPresent()) {
+            deleteMisclassifiedExplorerPreview(explorerTarget, misclassifiedExplorerPreview,
+                    options.deleteLowerQualityPreviews(), counter);
             return savePreview(plan.source(), miniPreview.get(), miniTarget, options.overwritePreviews(),
                     RecoveryOutcome.MINI_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
         counter.previewsUnavailable.incrementAndGet();
         return event(plan.source(), RecoveryOutcome.NO_FILE, "Большое и маленькое превью недоступны");
+    }
+
+    /**
+     * Не позволяет старой обложке с ошибочным префиксом {@code PREW_} остановить
+     * получение качественного превью. Оригинальные файлы этим методом никогда
+     * не открываются и не удаляются.
+     */
+    private boolean hasUsableExplorerPreview(Path explorerTarget) {
+        if (!Files.isRegularFile(explorerTarget)) {
+            return false;
+        }
+        try {
+            BufferedImage image = ImageIO.read(explorerTarget.toFile());
+            boolean usable = image != null && WindowsShellPreviewExtractor.isLargePreview(image);
+            if (!usable) {
+                ApplicationLogger.info("Игнорирую маленький файл с ошибочным префиксом PREW_: " + explorerTarget);
+            }
+            return usable;
+        } catch (IOException exception) {
+            ApplicationLogger.error("Не удалось проверить размер PREW_-превью: " + explorerTarget, exception);
+            return false;
+        }
+    }
+
+    /** Удаляет только ошибочно названную маленькую картинку, когда ей уже найден корректный результат. */
+    private void deleteMisclassifiedExplorerPreview(Path explorerTarget, boolean misclassified,
+                                                     boolean enabled, Counter counter) {
+        if (!enabled || !misclassified) {
+            return;
+        }
+        try {
+            if (Files.deleteIfExists(explorerTarget)) {
+                counter.previewsDeleted.incrementAndGet();
+                ApplicationLogger.info("Удалено маленькое превью с ошибочным префиксом PREW_: " + explorerTarget);
+            }
+        } catch (IOException exception) {
+            ApplicationLogger.error("Не удалось удалить ошибочно названное PREW_-превью: " + explorerTarget, exception);
+        }
     }
 
     private RecoveryEvent savePreview(Path source, BufferedImage preview, Path destination,
@@ -344,6 +475,12 @@ public final class RecoveryService {
     }
 
     private record IndexedEvent(Path source, RecoveryEvent event) {
+    }
+
+    private record FolderFiles(Path folder, List<Path> files) {
+    }
+
+    private record FolderProgress(int submitted, int completed) {
     }
 
     private static final class Counter {
