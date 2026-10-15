@@ -1,6 +1,5 @@
 package ru.restoreyandex.preview;
 
-import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -46,7 +45,7 @@ public final class YandexDiskBrowserPreviewExtractor implements CloudPreviewExtr
      * параллельных открытий просмотрщика и ограничивает запросы одним каналом.
      */
     @Override
-    public synchronized Optional<BufferedImage> extract(Path relativePath) {
+    public synchronized Optional<BrowserPreview> extract(Path relativePath) {
         return session.extractLargestPreview(relativePath);
     }
 }

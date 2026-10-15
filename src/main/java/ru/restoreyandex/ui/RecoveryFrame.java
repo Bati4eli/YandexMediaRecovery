@@ -40,11 +40,13 @@ import java.awt.Font;
 import java.awt.Image;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
+import java.util.List;
 import java.util.stream.IntStream;
 
 /** Главное окно для длительной операции восстановления. */
@@ -65,6 +67,7 @@ public final class RecoveryFrame extends JFrame {
     private final JButton stopButton = new JButton("⏹ Остановить восстановление");
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
+    private List<Path> savedSelectedFolders = List.of();
     private RecoveryWorker activeRecoveryWorker;
 
     /** Создаёт окно и подставляет ранее сохранённые папки, если они есть. */
@@ -77,6 +80,7 @@ public final class RecoveryFrame extends JFrame {
         deleteLowerQualityPreviewsCheckBox.setSelected(settings.deleteLowerQualityPreviews());
         parallelismComboBox.setSelectedItem(settings.parallelism());
         browserDebugModeCheckBox.setSelected(settings.browserDebugMode());
+        savedSelectedFolders = settings.selectedFolders();
         setApplicationIcon();
         initialize();
     }
@@ -128,6 +132,7 @@ public final class RecoveryFrame extends JFrame {
         overwritePreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
         deleteLowerQualityPreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
         parallelismComboBox.addActionListener(event -> saveCurrentSettings());
+        folderSelectionTree.setSelectionChangedListener(this::saveCurrentSettings);
         browserDebugModeCheckBox.addActionListener(event -> {
             applyBrowserDebugMode();
             saveCurrentSettings();
@@ -177,7 +182,7 @@ public final class RecoveryFrame extends JFrame {
         center.add(bottomControls, BorderLayout.SOUTH);
         add(top, BorderLayout.NORTH);
         add(center, BorderLayout.CENTER);
-        reloadFolderTree(Path.of(sourceField.getText()));
+        reloadFolderTree(Path.of(sourceField.getText()), savedSelectedFolders);
         pack();
     }
 
@@ -306,13 +311,14 @@ public final class RecoveryFrame extends JFrame {
             appendLog(RecoveryLogLineFormatter.format(event, sourceRoot) + "\n");
         }
         logArea.setCaretPosition(logArea.getDocument().getLength());
+        progressBar.paintImmediately(progressBar.getVisibleRect());
     }
 
     private void saveCurrentSettings() {
         try {
             settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
                     overwritePreviewsCheckBox.isSelected(), deleteLowerQualityPreviewsCheckBox.isSelected(),
-                    selectedParallelism(), browserDebugModeCheckBox.isSelected()));
+                    selectedParallelism(), browserDebugModeCheckBox.isSelected(), folderSelectionTree.selectedFolders()));
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось сохранить настройки", exception);
             JOptionPane.showMessageDialog(this, "Не удалось сохранить настройки: " + exception.getMessage(),
@@ -325,8 +331,12 @@ public final class RecoveryFrame extends JFrame {
     }
 
     private void reloadFolderTree(Path sourceRoot) {
+        reloadFolderTree(sourceRoot, java.util.List.of());
+    }
+
+    private void reloadFolderTree(Path sourceRoot, java.util.List<Path> selectedFolders) {
         try {
-            folderSelectionTree.reload(sourceRoot);
+            folderSelectionTree.reload(sourceRoot, selectedFolders);
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось построить дерево папок Яндекс Диска", exception);
         }
@@ -359,19 +369,9 @@ public final class RecoveryFrame extends JFrame {
                     }
 
                     @Override
-                    public void onFileStarted(Path source, int processed, int totalFiles) {
-                        SwingUtilities.invokeLater(() -> {
-                            progressBar.setIndeterminate(false);
-                            progressBar.setMaximum(Math.max(totalFiles, 1));
-                            progressBar.setValue(Math.max(processed - 1, 0));
-                            progressBar.setString(processed + " / " + totalFiles + " — проверка");
-                        });
-                    }
-
-                    @Override
                     public void onFileProcessed(RecoveryEvent event) {
                         csvLogger.onFileProcessed(event);
-                        SwingUtilities.invokeLater(() -> updateProgress(event, source));
+                        updateProgressOnEdt(event, source);
                     }
                 });
             }
@@ -401,6 +401,26 @@ public final class RecoveryFrame extends JFrame {
                 JOptionPane.showMessageDialog(RecoveryFrame.this, "Операция не началась: " + message,
                         "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
+        }
+    }
+
+    /**
+     * Подтверждает отрисовку каждого завершённого файла до перехода к
+     * следующему. Это не даёт очереди EDT скрыть прогресс при массовом
+     * пропуске уже восстановленных файлов.
+     */
+    private void updateProgressOnEdt(RecoveryEvent event, Path sourceRoot) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            updateProgress(event, sourceRoot);
+            return;
+        }
+        try {
+            SwingUtilities.invokeAndWait(() -> updateProgress(event, sourceRoot));
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            ApplicationLogger.error("Поток восстановления прерван при обновлении прогресса", exception);
+        } catch (InvocationTargetException exception) {
+            ApplicationLogger.error("Не удалось обновить прогресс восстановления", exception.getCause());
         }
     }
 

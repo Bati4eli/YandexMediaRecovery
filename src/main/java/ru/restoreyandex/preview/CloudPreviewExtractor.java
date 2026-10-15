@@ -1,6 +1,5 @@
 package ru.restoreyandex.preview;
 
-import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Optional;
@@ -12,7 +11,7 @@ public interface CloudPreviewExtractor {
      * Пытается получить превью по пути, относительному к корню локального Диска.
      * Реализация не должна записывать файлы назначения.
      */
-    Optional<BufferedImage> extract(Path relativePath);
+    Optional<BrowserPreview> extract(Path relativePath);
 
     /**
      * Открывает окно браузера для ручного входа. Не поддерживающие авторизацию

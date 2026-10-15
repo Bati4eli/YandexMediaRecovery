@@ -1,19 +1,28 @@
 package ru.restoreyandex.config;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /** Последние папки и параметры, выбранные пользователем для восстановления. */
 public record RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
-                               boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode) {
+                               boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode,
+                               List<Path> selectedFolders) {
     /** Создаёт настройки со включённым удалением превью худшего качества. */
     public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews, int parallelism) {
-        this(sourceFolder, destinationFolder, overwritePreviews, true, parallelism, false);
+        this(sourceFolder, destinationFolder, overwritePreviews, true, parallelism, false, List.of());
     }
 
     /** Создаёт настройки без отладочного показа браузера для старых вызовов. */
     public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
                             boolean deleteLowerQualityPreviews, int parallelism) {
-        this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism, false);
+        this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism, false, List.of());
+    }
+
+    /** Создаёт настройки без сохранённого состояния дерева для старых вызовов. */
+    public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
+                            boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode) {
+        this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism,
+                browserDebugMode, List.of());
     }
     /** Типовой путь Яндекс Диска внутри домашней папки текущего пользователя. */
     public static final Path DEFAULT_SOURCE = Path.of(System.getProperty("user.home"), "Yandex.Disk");
@@ -25,5 +34,6 @@ public record RecoverySettings(Path sourceFolder, Path destinationFolder, boolea
         if (parallelism < 1 || parallelism > 10) {
             throw new IllegalArgumentException("Количество потоков должно быть от 1 до 10");
         }
+        selectedFolders = List.copyOf(selectedFolders);
     }
 }

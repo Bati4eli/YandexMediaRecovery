@@ -7,18 +7,14 @@ import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.AriaRole;
-import com.microsoft.playwright.options.WaitForSelectorState;
 import com.microsoft.playwright.options.WaitUntilState;
 import ru.restoreyandex.config.ApplicationPaths;
 import ru.restoreyandex.logging.ApplicationLogger;
 
 import java.io.IOException;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.net.URLDecoder;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
-import javax.imageio.ImageIO;
 import java.util.Optional;
 
 /**
@@ -33,7 +29,6 @@ import java.util.Optional;
 public final class YandexDiskBrowserSession implements AutoCloseable {
     private static final String DISK_ROOT = "https://disk.yandex.ru/client/disk";
     private static final String PREVIEW_IMAGE_SELECTOR = "img.scalable-preview__image";
-    private static final String VISIBLE_PREVIEW_IMAGE_SELECTOR = PREVIEW_IMAGE_SELECTOR + ":visible";
     private static final long PREVIEW_WAIT_MILLIS = 30_000;
     private static final long MINIMUM_REQUEST_INTERVAL_MILLIS = 200;
     private final RequestRateLimiter requestRateLimiter = new RequestRateLimiter(MINIMUM_REQUEST_INTERVAL_MILLIS);
@@ -68,25 +63,19 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
      *
      * <p>Последовательность намеренно выполняется под одним монитором:
      * открывается URL конкретного файла, ожидается <em>видимое</em> и уже
-     * декодированное изображение, затем читается тело того же сетевого ответа
+     * готовое изображение, затем читается тело того же сетевого ответа
      * через Playwright. Отдельный {@code HttpClient} здесь запрещён: ссылка
      * предпросмотра может быть привязана к сессии Chrome и второй запрос
      * получает HTTP 403. Скрытые изображения предыдущего слайда исключаются
      * селектором {@code :visible}.</p>
      *
-     * <p>Если Chrome взял ресурс из кэша и не сообщил Playwright новый ответ,
-     * метод сохраняет PNG-снимок уже показанного элемента. Это запасной путь
-     * без сетевого запроса; его разрешение может быть ниже исходного ответа.</p>
-     *
      * @param relativePath путь к файлу относительно корня Яндекс Диска
-     * @return декодированное большое превью или пустой результат при ошибке
+     * @return исходные байты большого превью или пустой результат при ошибке
      */
-    public synchronized Optional<BufferedImage> extractLargestPreview(Path relativePath) {
-        Page activePage = null;
+    public synchronized Optional<BrowserPreview> extractLargestPreview(Path relativePath) {
         try {
             requestRateLimiter.awaitSlot();
             Page browserPage = ensurePage(true);
-            activePage = browserPage;
             var viewerUri = YandexDiskUrlBuilder.viewerUri(relativePath);
             ApplicationLogger.info("Браузер: открываю просмотр " + relativePath + " — " + viewerUri);
             Response previewResponse = browserPage.waitForResponse(
@@ -99,18 +88,18 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
                 return Optional.empty();
             }
             ApplicationLogger.info("Браузер: получаю уже загруженное превью " + previewResponse.url());
-            Optional<BufferedImage> preview = decodeBrowserPreviewBytes(previewResponse.body());
-            if (preview.isEmpty()) {
-                ApplicationLogger.info("Браузер вернул не изображение: " + relativePath);
-                return screenshotVisiblePreview(browserPage, relativePath);
+            byte[] bytes = previewResponse.body();
+            if (bytes.length == 0) {
+                ApplicationLogger.info("Chrome получил пустой ресурс превью: " + relativePath);
+                return Optional.empty();
             }
-            BufferedImage image = preview.orElseThrow();
-            ApplicationLogger.info("Большое превью получено из Chrome: %dx%d"
-                    .formatted(image.getWidth(), image.getHeight()));
-            return preview;
+            String extension = previewExtension(previewResponse.headerValue("content-type"));
+            ApplicationLogger.info("Большое превью получено из Chrome без перекодирования: %d байт, .%s"
+                    .formatted(bytes.length, extension));
+            return Optional.of(new BrowserPreview(bytes, extension));
         } catch (PlaywrightException | IllegalArgumentException exception) {
             ApplicationLogger.error("Не удалось получить большое превью из Chrome", exception);
-            return screenshotVisiblePreview(activePage, relativePath);
+            return Optional.empty();
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             ApplicationLogger.error("Ожидание обращения к Яндекс Диску прервано", exception);
@@ -129,14 +118,6 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
                     return visible && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
                 })
                 """, PREVIEW_IMAGE_SELECTOR, previewImageWaitOptions());
-        visiblePreviewImage(activePage).waitFor(new Locator.WaitForOptions()
-                .setState(WaitForSelectorState.VISIBLE)
-                .setTimeout(PREVIEW_WAIT_MILLIS));
-    }
-
-    /** Находит единственную открытую фотографию; старые слайды просмотрщика остаются в DOM, но скрыты. */
-    private Locator visiblePreviewImage(Page activePage) {
-        return activePage.locator(VISIBLE_PREVIEW_IMAGE_SELECTOR).last();
     }
 
     /**
@@ -153,43 +134,25 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
         return decodedUrl.contains("filename=" + fileName);
     }
 
-    /** Декодирует тело ответа Chrome; метод выделен для проверки без настоящей авторизации в Яндекс Диске. */
-    static Optional<BufferedImage> decodeBrowserPreviewBytes(byte[] bytes) {
-        try {
-            return Optional.ofNullable(ImageIO.read(new ByteArrayInputStream(bytes)));
-        } catch (IOException exception) {
-            ApplicationLogger.error("Не удалось декодировать байты превью, полученные Chrome", exception);
-            return Optional.empty();
+    /** Сопоставляет Content-Type ответа с расширением, не меняя скачанный формат. */
+    static String previewExtension(String contentType) {
+        if (contentType == null) {
+            return "bin";
         }
-    }
-
-    /**
-     * Создаёт PNG-снимок уже отображённого элемента только при отсутствии
-     * доступного сетевого ответа Chrome (например, при чтении из кэша).
-     */
-    private Optional<BufferedImage> screenshotVisiblePreview(Page activePage, Path relativePath) {
-        if (activePage == null || activePage.isClosed()) {
-            return Optional.empty();
+        String normalized = contentType.toLowerCase(java.util.Locale.ROOT);
+        if (normalized.startsWith("image/jpeg")) {
+            return "jpg";
         }
-        try {
-            Locator imageElement = visiblePreviewImage(activePage);
-            Object source = imageElement.evaluate("image => image.currentSrc || image.src");
-            if (!(source instanceof String imageUrl)
-                    || !isPreviewResponseUrl(imageUrl, relativePath.getFileName().toString())) {
-                ApplicationLogger.info("Chrome не показал превью нужного файла; снимок не сохраняется: " + relativePath);
-                return Optional.empty();
-            }
-            Optional<BufferedImage> screenshot = decodeBrowserPreviewBytes(imageElement.screenshot());
-            if (screenshot.isPresent()) {
-                BufferedImage image = screenshot.orElseThrow();
-                ApplicationLogger.info("Большое превью сохранено снимком из Chrome: %dx%d"
-                        .formatted(image.getWidth(), image.getHeight()));
-            }
-            return screenshot;
-        } catch (PlaywrightException exception) {
-            ApplicationLogger.error("Не удалось снять уже открытое превью Chrome: " + relativePath, exception);
-            return Optional.empty();
+        if (normalized.startsWith("image/png")) {
+            return "png";
         }
+        if (normalized.startsWith("image/webp")) {
+            return "webp";
+        }
+        if (normalized.startsWith("image/gif")) {
+            return "gif";
+        }
+        return "bin";
     }
 
     /**

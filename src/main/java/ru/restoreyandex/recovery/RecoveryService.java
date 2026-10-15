@@ -14,6 +14,7 @@ import ru.restoreyandex.preview.PreviewExtractor;
 import ru.restoreyandex.preview.WindowsShellPreviewExtractor;
 import ru.restoreyandex.preview.CloudPreviewExtractor;
 import ru.restoreyandex.preview.YandexDiskBrowserPreviewExtractor;
+import ru.restoreyandex.preview.BrowserPreview;
 import ru.restoreyandex.logging.ApplicationLogger;
 
 import java.awt.image.BufferedImage;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Stream;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
@@ -294,12 +296,11 @@ public final class RecoveryService {
      */
     private RecoveryEvent writePreview(RecoveryPlan plan, Path sourceRoot,
                                        RecoveryOptions options, Counter counter) throws IOException {
-        Path webTarget = previewTarget(plan, MediaExtensions.webPreviewName(plan.source()));
         Path explorerTarget = previewTarget(plan, MediaExtensions.previewName(plan.source()));
         Path miniTarget = previewTarget(plan, MediaExtensions.miniPreviewName(plan.source()));
         boolean usableExplorerPreview = hasUsableExplorerPreview(explorerTarget);
         boolean misclassifiedExplorerPreview = Files.isRegularFile(explorerTarget) && !usableExplorerPreview;
-        if (Files.exists(webTarget)) {
+        if (findExistingWebPreview(plan.source(), plan.destination()).isPresent()) {
             return existingPreview(plan, RecoveryOutcome.WEB_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
         if (usableExplorerPreview && !options.overwritePreviews()) {
@@ -319,9 +320,11 @@ public final class RecoveryService {
                     RecoveryOutcome.EXPLORER_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
 
-        Optional<BufferedImage> webPreview = cloudPreviewExtractor.extract(sourceRoot.relativize(plan.source()));
+        Optional<BrowserPreview> webPreview = cloudPreviewExtractor.extract(sourceRoot.relativize(plan.source()));
         if (webPreview.isPresent()) {
-            return savePreview(plan.source(), webPreview.get(), webTarget, options.overwritePreviews(),
+            BrowserPreview resource = webPreview.orElseThrow();
+            Path webTarget = previewTarget(plan, MediaExtensions.webPreviewName(plan.source(), resource.extension()));
+            return saveBrowserPreview(plan.source(), resource, webTarget, options.overwritePreviews(),
                     RecoveryOutcome.WEB_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
         if (usableExplorerPreview) {
@@ -394,6 +397,23 @@ public final class RecoveryService {
         }
     }
 
+    /** Сохраняет без преобразования сетевой файл, который уже скачала вкладка Chrome. */
+    private RecoveryEvent saveBrowserPreview(Path source, BrowserPreview preview, Path destination,
+                                             boolean overwritePreviews, RecoveryOutcome outcome,
+                                             boolean deleteLowerQualityPreviews, Counter counter) throws IOException {
+        try {
+            fileWriter.writePreview(preview.bytes(), destination, overwritePreviews);
+            counter.previewsSaved.incrementAndGet();
+            deleteLowerQualityPreviews(source, destination.resolveSibling(source.getFileName()), outcome,
+                    deleteLowerQualityPreviews, counter);
+            return event(source, outcome, "Ресурс превью Chrome сохранён без перекодирования: " + destination);
+        } catch (FileAlreadyExistsException exception) {
+            counter.skipped.incrementAndGet();
+            ApplicationLogger.info("Превью уже существует и пропущено: " + destination);
+            return event(source, RecoveryOutcome.ALREADY_OK, "Уже существует: " + destination);
+        }
+    }
+
     private RecoveryEvent existingPreview(RecoveryPlan plan, RecoveryOutcome retainedPreview,
                                           boolean deleteLowerQualityPreviews, Counter counter) {
         int deleted = deleteLowerQualityPreviews(plan.source(), plan.destination(), retainedPreview,
@@ -417,8 +437,7 @@ public final class RecoveryService {
             return 0;
         }
         List<Path> targets = switch (retained) {
-            case COPIED -> List.of(previewTarget(originalTarget, MediaExtensions.webPreviewName(source)),
-                    previewTarget(originalTarget, MediaExtensions.previewName(source)),
+            case COPIED -> List.of(previewTarget(originalTarget, MediaExtensions.previewName(source)),
                     previewTarget(originalTarget, MediaExtensions.miniPreviewName(source)));
             case WEB_PREVIEW_SAVED -> List.of(previewTarget(originalTarget, MediaExtensions.previewName(source)),
                     previewTarget(originalTarget, MediaExtensions.miniPreviewName(source)));
@@ -426,6 +445,9 @@ public final class RecoveryService {
             case MINI_PREVIEW_SAVED, PREVIEWS_CLEANED, ALREADY_OK, NO_FILE -> List.of();
         };
         int deleted = 0;
+        if (retained == RecoveryOutcome.COPIED) {
+            deleted += deleteWebPreviews(source, originalTarget, counter);
+        }
         for (Path target : targets) {
             try {
                 if (Files.deleteIfExists(target)) {
@@ -437,6 +459,49 @@ public final class RecoveryService {
             }
         }
         return deleted;
+    }
+
+    /** Находит WEBPV_ с любым форматом: Яндекс может вернуть JPEG, PNG или WebP. */
+    private Optional<Path> findExistingWebPreview(Path source, Path originalTarget) {
+        Path directory = originalTarget.getParent();
+        if (directory == null || !Files.isDirectory(directory)) {
+            return Optional.empty();
+        }
+        String prefix = webPreviewPrefix(source);
+        try (Stream<Path> siblings = Files.list(directory)) {
+            return siblings.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().startsWith(prefix))
+                    .findFirst();
+        } catch (IOException exception) {
+            ApplicationLogger.error("Не удалось проверить существующее WEBPV_-превью: " + originalTarget, exception);
+            return Optional.empty();
+        }
+    }
+
+    /** Удаляет только WEBPV_-файлы текущего оригинала, не затрагивая никакие другие данные. */
+    private int deleteWebPreviews(Path source, Path originalTarget, Counter counter) {
+        Path directory = originalTarget.getParent();
+        if (directory == null || !Files.isDirectory(directory)) {
+            return 0;
+        }
+        int deleted = 0;
+        try (Stream<Path> siblings = Files.list(directory)) {
+            for (Path preview : siblings.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().startsWith(webPreviewPrefix(source))).toList()) {
+                if (Files.deleteIfExists(preview)) {
+                    deleted++;
+                    counter.previewsDeleted.incrementAndGet();
+                }
+            }
+        } catch (IOException exception) {
+            ApplicationLogger.error("Не удалось удалить WEBPV_-превью: " + originalTarget, exception);
+        }
+        return deleted;
+    }
+
+    private String webPreviewPrefix(Path source) {
+        String defaultName = MediaExtensions.webPreviewName(source);
+        return defaultName.substring(0, defaultName.lastIndexOf('.') + 1);
     }
 
     private Path previewTarget(Path originalTarget, String previewName) {

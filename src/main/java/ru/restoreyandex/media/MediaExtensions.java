@@ -40,15 +40,24 @@ public final class MediaExtensions {
         return previewName(source, "WEBPV_");
     }
 
+    /** Строит имя исходного веб-превью с расширением, которое сообщил сервер. */
+    public static String webPreviewName(Path source, String extension) {
+        return previewName(source, "WEBPV_", extension);
+    }
+
     /** Строит имя маленькой обложки файла, полученной из Windows Explorer. */
     public static String miniPreviewName(Path source) {
         return previewName(source, "MINIPV_");
     }
 
     private static String previewName(Path source, String prefix) {
+        return previewName(source, prefix, "png");
+    }
+
+    private static String previewName(Path source, String prefix, String extension) {
         String name = source.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String baseName = dot > 0 ? name.substring(0, dot) : name;
-        return prefix + baseName + ".png";
+        return prefix + baseName + "." + extension;
     }
 }

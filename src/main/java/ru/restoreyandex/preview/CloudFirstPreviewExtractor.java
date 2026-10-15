@@ -1,6 +1,9 @@
 package ru.restoreyandex.preview;
 
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import javax.imageio.ImageIO;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.Optional;
@@ -33,7 +36,14 @@ public final class CloudFirstPreviewExtractor implements PreviewExtractor {
         if (!normalizedFile.startsWith(sourceRoot)) {
             return shellExtractor.extract(file);
         }
-        Optional<BufferedImage> cloudPreview = cloudExtractor.extract(sourceRoot.relativize(normalizedFile));
-        return cloudPreview.isPresent() ? cloudPreview : shellExtractor.extract(file);
+        Optional<BrowserPreview> cloudPreview = cloudExtractor.extract(sourceRoot.relativize(normalizedFile));
+        if (cloudPreview.isEmpty()) {
+            return shellExtractor.extract(file);
+        }
+        try {
+            return Optional.ofNullable(ImageIO.read(new ByteArrayInputStream(cloudPreview.orElseThrow().bytes())));
+        } catch (IOException exception) {
+            return shellExtractor.extract(file);
+        }
     }
 }

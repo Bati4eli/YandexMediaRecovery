@@ -24,19 +24,27 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 /**
- * Встроенное дерево подпапок корня Яндекс Диска с выбором нескольких веток.
- * Узлы подгружаются только при раскрытии; включённая папка наследует выбор
- * всем ещё не загруженным потомкам.
+ * Дерево выбора папок восстановления.
+ *
+ * <p>После перезапуска сначала показывает корневые папки выключенными. Затем
+ * раскрывает только ветки, записанные в YAML, и включает их. Пустой список в
+ * YAML имеет специальный смысл: выбраны все папки.</p>
  */
 final class FolderSelectionTree extends JPanel {
-    private final DirectoryNode placeholderRoot = new DirectoryNode(null, "Выберите корень Яндекс Диска", true);
+    private final DirectoryNode placeholderRoot = new DirectoryNode(null, "Выберите корень Яндекс Диска", false);
     private final DefaultTreeModel model = new DefaultTreeModel(placeholderRoot);
     private final JTree tree = new JTree(model);
     private final JButton selectAllButton = new JButton("Выбрать всё");
+    private Path rootFolder;
+    private List<Path> restoredSelectedFolders = List.of();
+    private boolean defaultAllSelected = true;
     private boolean selectionEditingEnabled = true;
+    private Runnable selectionChangedListener = () -> { };
 
     FolderSelectionTree() {
         super(new BorderLayout(0, 4));
@@ -54,43 +62,69 @@ final class FolderSelectionTree extends JPanel {
         });
         installLazyLoading();
         installSelectionToggle();
-
         selectAllButton.addActionListener(event -> {
-            if (!selectionEditingEnabled) {
+            if (!selectionEditingEnabled || !(model.getRoot() instanceof DirectoryNode root)) {
                 return;
             }
-            if (model.getRoot() instanceof DirectoryNode root) {
-                setSelection(root, true);
-                tree.repaint();
-            }
+            applySelection(root, true);
+            defaultAllSelected = true;
+            tree.repaint();
+            selectionChangedListener.run();
         });
+
         JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        header.add(new JLabel("Отметьте нужные папки. По умолчанию выбраны все."));
+        header.add(new JLabel("Отметьте нужные папки. При пустом выборе будут выбраны все."));
         header.add(selectAllButton);
         add(header, BorderLayout.NORTH);
         add(new JScrollPane(tree), BorderLayout.CENTER);
     }
 
-    /** Загружает новый корень и включает все его подпапки по умолчанию. */
+    /** Перезагружает дерево с обычным правилом «выбрать всё». */
     void reload(Path rootFolder) {
-        Path root = rootFolder.toAbsolutePath().normalize();
-        DirectoryNode rootNode = new DirectoryNode(root, DirectoryTreeSupport.displayName(root), true);
-        model.setRoot(rootNode);
-        tree.setSelectionPath(new TreePath(rootNode.getPath()));
-        loadChildren(rootNode);
+        reload(rootFolder, List.of());
     }
 
-    /** Возвращает компактные правила, а не список всех файлов выбранных подпапок. */
+    /**
+     * Строит дерево в три шага: корень выключен, сохранённые ветки раскрыты и
+     * включены, либо при пустом списке выбраны все папки.
+     */
+    void reload(Path sourceRoot, List<Path> selectedFolders) {
+        rootFolder = sourceRoot.toAbsolutePath().normalize();
+        restoredSelectedFolders = selectedFolders.stream()
+                .map(path -> path.toAbsolutePath().normalize())
+                .filter(path -> path.startsWith(rootFolder) && !path.equals(rootFolder))
+                .distinct()
+                .sorted(Comparator.comparing(Path::toString, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+        defaultAllSelected = restoredSelectedFolders.isEmpty();
+        DirectoryNode rootNode = new DirectoryNode(rootFolder, DirectoryTreeSupport.displayName(rootFolder), false);
+        model.setRoot(rootNode);
+        tree.setSelectionPath(new TreePath(rootNode.getPath()));
+        loadChildren(rootNode, () -> restoreSelection(rootNode));
+    }
+
+    /** Возвращает выбранные корни папок для YAML; пустой список означает «выбрать всё». */
+    List<Path> selectedFolders() {
+        if (defaultAllSelected || !(model.getRoot() instanceof DirectoryNode root) || root.path == null) {
+            return List.of();
+        }
+        List<Path> selected = new ArrayList<>();
+        collectSelectedRoots(root, selected);
+        return selected.size() == 1 && selected.getFirst().equals(root.path) ? List.of() : List.copyOf(selected);
+    }
+
+    /** Преобразует текущее дерево в правила для запуска восстановления. */
     FolderSelection selection() {
-        if (!(model.getRoot() instanceof DirectoryNode root) || root.path == null) {
+        if (defaultAllSelected || rootFolder == null) {
             return FolderSelection.allFolders();
         }
         List<FolderSelectionRule> rules = new ArrayList<>();
-        collectRules(root, true, rules);
+        rules.add(new FolderSelectionRule(rootFolder, false));
+        selectedFolders().forEach(path -> rules.add(new FolderSelectionRule(path, true)));
         return new FolderSelection(rules);
     }
 
-    /** Блокирует изменение отмеченных папок на время активного восстановления. */
+    /** Блокирует флажки на время активного восстановления. */
     void setSelectionEditingEnabled(boolean enabled) {
         selectionEditingEnabled = enabled;
         tree.setEnabled(enabled);
@@ -98,31 +132,93 @@ final class FolderSelectionTree extends JPanel {
         tree.repaint();
     }
 
-    private void collectRules(DirectoryNode node, boolean inheritedSelection, List<FolderSelectionRule> rules) {
-        if (node.path != null && node.selected != inheritedSelection) {
-            rules.add(new FolderSelectionRule(node.path, node.selected));
+    /** Задаёт действие после пользовательского изменения флажка. */
+    void setSelectionChangedListener(Runnable listener) {
+        selectionChangedListener = Objects.requireNonNull(listener);
+    }
+
+    private void restoreSelection(DirectoryNode root) {
+        if (restoredSelectedFolders.isEmpty()) {
+            applySelection(root, true);
+            tree.repaint();
+            return;
         }
+        for (Path selectedFolder : restoredSelectedFolders) {
+            restoreSelectedPath(root, selectedFolder);
+        }
+    }
+
+    /** Раскрывает только предков сохранённой папки и включает её. */
+    private void restoreSelectedPath(DirectoryNode node, Path selectedFolder) {
+        if (!selectedFolder.startsWith(node.path)) {
+            return;
+        }
+        if (selectedFolder.equals(node.path)) {
+            applySelection(node, true);
+            tree.expandPath(new TreePath(node.getPath()));
+            tree.repaint();
+            return;
+        }
+        loadChildren(node, () -> {
+            DirectoryNode child = childFor(node, selectedFolder);
+            if (child == null) {
+                ApplicationLogger.info("Сохранённая папка больше не найдена: " + selectedFolder);
+                return;
+            }
+            tree.expandPath(new TreePath(node.getPath()));
+            restoreSelectedPath(child, selectedFolder);
+        });
+    }
+
+    private DirectoryNode childFor(DirectoryNode parent, Path target) {
+        for (int index = 0; index < parent.getChildCount(); index++) {
+            Object child = parent.getChildAt(index);
+            if (child instanceof DirectoryNode directoryNode && target.startsWith(directoryNode.path)) {
+                return directoryNode;
+            }
+        }
+        return null;
+    }
+
+    private void collectSelectedRoots(DirectoryNode node, List<Path> selected) {
+        List<DirectoryNode> directories = directoryChildren(node);
+        if (allLoadedDescendantsSelected(node)) {
+            selected.add(node.path);
+            return;
+        }
+        for (DirectoryNode child : directories) {
+            collectSelectedRoots(child, selected);
+        }
+    }
+
+    /** Не сворачивает выбранного предка, если в загруженной глубокой ветке есть снятый флажок. */
+    private boolean allLoadedDescendantsSelected(DirectoryNode node) {
+        return node.selected && directoryChildren(node).stream().allMatch(this::allLoadedDescendantsSelected);
+    }
+
+    private List<DirectoryNode> directoryChildren(DirectoryNode node) {
+        List<DirectoryNode> result = new ArrayList<>();
         for (int index = 0; index < node.getChildCount(); index++) {
             Object child = node.getChildAt(index);
             if (child instanceof DirectoryNode directoryNode) {
-                collectRules(directoryNode, node.selected, rules);
+                result.add(directoryNode);
             }
         }
+        return result;
     }
 
     private void installLazyLoading() {
         tree.addTreeWillExpandListener(new TreeWillExpandListener() {
             @Override
             public void treeWillExpand(TreeExpansionEvent event) {
-                Object component = event.getPath().getLastPathComponent();
-                if (component instanceof DirectoryNode node) {
-                    loadChildren(node);
+                if (event.getPath().getLastPathComponent() instanceof DirectoryNode node) {
+                    loadChildren(node, () -> { });
                 }
             }
 
             @Override
             public void treeWillCollapse(TreeExpansionEvent event) {
-                // Загруженные подпапки сохраняются, чтобы повторное раскрытие не читало диск снова.
+                // Загруженные данные сохраняются, чтобы повторное раскрытие не читало диск снова.
             }
         });
     }
@@ -140,25 +236,33 @@ final class FolderSelectionTree extends JPanel {
                 }
                 Rectangle rowBounds = tree.getPathBounds(path);
                 if (rowBounds != null && rowBounds.contains(event.getPoint())) {
-                    setSelection(node, !node.selected);
+                    applySelection(node, !node.selected);
+                    defaultAllSelected = false;
                     tree.repaint();
+                    selectionChangedListener.run();
                 }
             }
         });
     }
 
-    private void setSelection(DirectoryNode node, boolean selected) {
+    private void applySelection(DirectoryNode node, boolean selected) {
         node.selected = selected;
-        for (int index = 0; index < node.getChildCount(); index++) {
-            Object child = node.getChildAt(index);
-            if (child instanceof DirectoryNode directoryNode) {
-                setSelection(directoryNode, selected);
-            }
+        for (DirectoryNode child : directoryChildren(node)) {
+            applySelection(child, selected);
         }
     }
 
-    private void loadChildren(DirectoryNode node) {
-        if (node.path == null || node.loaded || node.loading) {
+    /** Подгружает непосредственных потомков один раз и выполняет ожидающие действия на EDT. */
+    private void loadChildren(DirectoryNode node, Runnable afterLoaded) {
+        if (node.path == null) {
+            return;
+        }
+        if (node.loaded) {
+            afterLoaded.run();
+            return;
+        }
+        node.afterLoad.add(afterLoaded);
+        if (node.loading) {
             return;
         }
         node.loading = true;
@@ -188,14 +292,17 @@ final class FolderSelectionTree extends JPanel {
                     node.add(new DefaultMutableTreeNode("Нет доступа к папке"));
                 }
                 model.nodeStructureChanged(node);
-                tree.expandPath(new TreePath(node.getPath()));
+                List<Runnable> callbacks = List.copyOf(node.afterLoad);
+                node.afterLoad.clear();
+                callbacks.forEach(Runnable::run);
             }
         }.execute();
     }
 
-    /** Узел с наследуемым состоянием флажка и ленивой загрузкой потомков. */
+    /** Узел с флажком, ленивой загрузкой и очередью восстановления сохранённого пути. */
     private static final class DirectoryNode extends DefaultMutableTreeNode {
         private final Path path;
+        private final List<Runnable> afterLoad = new ArrayList<>();
         private boolean selected;
         private boolean loaded;
         private boolean loading;

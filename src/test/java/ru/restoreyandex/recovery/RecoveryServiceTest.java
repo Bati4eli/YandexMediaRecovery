@@ -9,6 +9,7 @@ import ru.restoreyandex.domain.RecoveryReport;
 import ru.restoreyandex.domain.FolderSelection;
 import ru.restoreyandex.domain.FolderSelectionRule;
 import ru.restoreyandex.preview.CloudPreviewExtractor;
+import ru.restoreyandex.preview.BrowserPreview;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -20,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CountDownLatch;
@@ -30,6 +32,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -98,6 +101,29 @@ class RecoveryServiceTest {
     }
 
     @Test
+    void reportsProgressForEveryFileThatIsAlreadyRecovered() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        writeImage(source.resolve("one.png"), Color.BLUE);
+        writeImage(source.resolve("two.png"), Color.BLUE);
+        writeImage(destination.resolve("one.png"), Color.RED);
+        writeImage(destination.resolve("two.png"), Color.RED);
+        List<ru.restoreyandex.domain.RecoveryEvent> processed = new ArrayList<>();
+
+        serviceWithNoPreview().recover(source, destination, new RecoveryListener() {
+            @Override
+            public void onFileProcessed(ru.restoreyandex.domain.RecoveryEvent event) {
+                processed.add(event);
+            }
+        });
+
+        assertEquals(2, processed.size());
+        assertEquals(1, processed.get(0).processed());
+        assertEquals(2, processed.get(1).processed());
+        assertEquals(2, processed.get(1).total());
+    }
+
+    @Test
     void skipsDestinationOriginalWithoutChangingAnyNeighboringPreview() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
@@ -134,11 +160,10 @@ class RecoveryServiceTest {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source/2011"));
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
-        BufferedImage browserPreview = image(Color.BLUE);
         BufferedImage shellPreview = image(Color.GREEN);
         CloudPreviewExtractor cloud = relativePath -> {
             assertEquals(Path.of("2011/lost.jpg"), relativePath);
-            return Optional.of(browserPreview);
+            return Optional.of(browserPreview(Color.BLUE));
         };
         RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
                 ignored -> Optional.of(shellPreview), cloud, new SafeFileWriter());
@@ -154,11 +179,27 @@ class RecoveryServiceTest {
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
         RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
-                ignored -> Optional.empty(), ignored -> Optional.of(image(Color.BLUE)), new SafeFileWriter());
+                ignored -> Optional.empty(), ignored -> Optional.of(browserPreview(Color.BLUE)), new SafeFileWriter());
 
         service.recover(source.getParent(), destination, new RecoveryListener() { });
 
         assertEquals(Color.BLUE.getRGB(), ImageIO.read(destination.resolve("2011/WEBPV_lost.png").toFile()).getRGB(0, 0));
+    }
+
+    @Test
+    void writesTheExactBrowserResourceWithoutScreenshotOrPngReencoding() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source/2011"));
+        Path destination = temporaryDirectory.resolve("destination");
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        byte[] resourceBytes = {10, 20, 30, 40, 50};
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.empty(), ignored -> Optional.of(new BrowserPreview(resourceBytes, "jpg")),
+                new SafeFileWriter());
+
+        service.recover(source.getParent(), destination, new RecoveryListener() { });
+
+        assertArrayEquals(resourceBytes, Files.readAllBytes(destination.resolve("2011/WEBPV_lost.jpg")));
+        assertFalse(Files.exists(destination.resolve("2011/WEBPV_lost.png")));
     }
 
     @Test
@@ -170,7 +211,7 @@ class RecoveryServiceTest {
         AtomicInteger browserRequests = new AtomicInteger();
         CloudPreviewExtractor cloud = relativePath -> {
             browserRequests.incrementAndGet();
-            return Optional.of(image(Color.BLUE));
+            return Optional.of(browserPreview(Color.BLUE));
         };
         RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
                 ignored -> Optional.empty(), cloud, new SafeFileWriter());
@@ -226,7 +267,7 @@ class RecoveryServiceTest {
                     return Optional.of(image(Color.GREEN));
                 }, ignored -> {
                     browserRequests.incrementAndGet();
-                    return Optional.of(image(Color.BLUE));
+                    return Optional.of(browserPreview(Color.BLUE));
                 }, ignored -> Optional.of(image(Color.MAGENTA)), new SafeFileWriter());
 
         service.recover(source, destination, new RecoveryListener() { });
@@ -260,7 +301,7 @@ class RecoveryServiceTest {
         AtomicInteger browserRequests = new AtomicInteger();
         CloudPreviewExtractor cloud = relativePath -> {
             browserRequests.incrementAndGet();
-            return Optional.of(image(Color.BLUE));
+            return Optional.of(browserPreview(Color.BLUE));
         };
         RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
                 ignored -> Optional.empty(), cloud, new SafeFileWriter());
@@ -270,6 +311,26 @@ class RecoveryServiceTest {
 
         assertEquals(1, browserRequests.get());
         assertNotNull(ImageIO.read(destination.resolve("WEBPV_lost.png").toFile()));
+    }
+
+    @Test
+    void doesNotDownloadBrowserPreviewAgainWhenTheSavedResourceIsJpeg() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        Files.write(destination.resolve("WEBPV_lost.jpg"), new byte[]{1, 2, 3});
+        AtomicInteger browserRequests = new AtomicInteger();
+        CloudPreviewExtractor cloud = relativePath -> {
+            browserRequests.incrementAndGet();
+            return Optional.of(browserPreview(Color.BLUE));
+        };
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.empty(), cloud, new SafeFileWriter());
+
+        service.recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(0, browserRequests.get());
+        assertArrayEquals(new byte[]{1, 2, 3}, Files.readAllBytes(destination.resolve("WEBPV_lost.jpg")));
     }
 
     @Test
@@ -370,7 +431,7 @@ class RecoveryServiceTest {
         AtomicBoolean browserClosed = new AtomicBoolean();
         CloudPreviewExtractor browser = new CloudPreviewExtractor() {
             @Override
-            public Optional<BufferedImage> extract(Path relativePath) {
+            public Optional<BrowserPreview> extract(Path relativePath) {
                 return Optional.empty();
             }
 
@@ -428,5 +489,14 @@ class RecoveryServiceTest {
         BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
         image.setRGB(0, 0, color.getRGB());
         return image;
+    }
+
+    private BrowserPreview browserPreview(Color color) {
+        try (java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            ImageIO.write(image(color), "png", output);
+            return new BrowserPreview(output.toByteArray(), "png");
+        } catch (java.io.IOException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 }

@@ -4,17 +4,15 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.WaitUntilState;
 import org.junit.jupiter.api.Test;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.net.URLEncoder;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Проверяет ограничения навигации, без запуска настоящего браузера. */
+/** Проверяет ограничения навигации и правило сохранения исходного ресурса Chrome. */
 class YandexDiskBrowserSessionTest {
     @Test
     void usesBoundedDomContentLoadedNavigationForPreviewPage() {
@@ -25,7 +23,7 @@ class YandexDiskBrowserSessionTest {
     }
 
     @Test
-    void waitsForDecodedPreviewImageWithinTheSameTimeout() {
+    void waitsForLoadedPreviewImageWithinTheSameTimeout() {
         Page.WaitForFunctionOptions options = YandexDiskBrowserSession.previewImageWaitOptions();
 
         assertEquals(30_000D, options.timeout);
@@ -37,20 +35,16 @@ class YandexDiskBrowserSessionTest {
     }
 
     @Test
-    void decodesTheBytesReturnedByChromeWithoutASecondHttpRequest() throws IOException {
-        BufferedImage expected = new BufferedImage(37, 19, BufferedImage.TYPE_INT_RGB);
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        ImageIO.write(expected, "png", bytes);
-
-        BufferedImage actual = YandexDiskBrowserSession.decodeBrowserPreviewBytes(bytes.toByteArray()).orElseThrow();
-
-        assertEquals(37, actual.getWidth());
-        assertEquals(19, actual.getHeight());
+    void keepsTheServerImageFormatWhenWritingTheBrowserResource() {
+        assertEquals("jpg", YandexDiskBrowserSession.previewExtension("image/jpeg; charset=binary"));
+        assertEquals("webp", YandexDiskBrowserSession.previewExtension("image/webp"));
+        assertEquals("bin", YandexDiskBrowserSession.previewExtension(null));
     }
 
     @Test
-    void rejectsNonImageBytesReturnedByBrowser() {
-        assertTrue(YandexDiskBrowserSession.decodeBrowserPreviewBytes(new byte[]{1, 2, 3}).isEmpty());
+    void neverContainsScreenshotFallbackForWebPreview() {
+        assertThrows(NoSuchMethodException.class,
+                () -> YandexDiskBrowserSession.class.getDeclaredMethod("screenshotVisiblePreview", Page.class, Path.class));
     }
 
     @Test

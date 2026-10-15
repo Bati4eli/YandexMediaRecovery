@@ -42,6 +42,18 @@ final class SafeFileWriter {
         }
     }
 
+    /** Записывает без изменений байты ресурса, полученного уже авторизованным Chrome. */
+    void writePreview(byte[] bytes, Path target, boolean replaceExisting) throws IOException {
+        prepareParent(target);
+        Path temporary = temporarySibling(target);
+        try {
+            Files.write(temporary, bytes);
+            movePreview(temporary, target, replaceExisting);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
     private void prepareParent(Path target) throws IOException {
         Path parent = target.getParent();
         if (parent == null) {
