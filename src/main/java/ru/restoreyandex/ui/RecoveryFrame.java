@@ -29,6 +29,8 @@ import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
+import java.awt.Cursor;
+import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
@@ -39,6 +41,7 @@ import java.awt.Image;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
 import java.net.URL;
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -46,6 +49,7 @@ import java.util.stream.IntStream;
 
 /** Главное окно для длительной операции восстановления. */
 public final class RecoveryFrame extends JFrame {
+    private static final URI PROJECT_REPOSITORY = URI.create("https://github.com/Bati4eli/YandexMediaRecovery");
     private final JTextField sourceField = new JTextField();
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
@@ -156,9 +160,21 @@ public final class RecoveryFrame extends JFrame {
         JPanel recoveryControl = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         recoveryControl.add(startButton);
         recoveryControl.add(stopButton);
+        JLabel repositoryLink = new JLabel("<html><a href=\"#\">GitHub: YandexMediaRecovery</a></html>");
+        repositoryLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        repositoryLink.setToolTipText(PROJECT_REPOSITORY.toString());
+        repositoryLink.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent event) {
+                openProjectRepository();
+            }
+        });
+        JPanel bottomControls = new JPanel(new BorderLayout());
+        bottomControls.add(recoveryControl, BorderLayout.WEST);
+        bottomControls.add(repositoryLink, BorderLayout.EAST);
         stopButton.setEnabled(false);
         stopButton.addActionListener(event -> stopRecovery());
-        center.add(recoveryControl, BorderLayout.SOUTH);
+        center.add(bottomControls, BorderLayout.SOUTH);
         add(top, BorderLayout.NORTH);
         add(center, BorderLayout.CENTER);
         reloadFolderTree(Path.of(sourceField.getText()));
@@ -208,6 +224,7 @@ public final class RecoveryFrame extends JFrame {
         saveCurrentSettings();
         startButton.setEnabled(false);
         yandexLoginButton.setEnabled(false);
+        folderSelectionTree.setSelectionEditingEnabled(false);
         stopButton.setEnabled(true);
         replaceLog("Подготовка списка файлов…\n");
         progressBar.setIndeterminate(true);
@@ -223,6 +240,20 @@ public final class RecoveryFrame extends JFrame {
         stopButton.setEnabled(false);
         appendLog("⏹ Останавливаю восстановление и закрываю Chrome…\n");
         recoveryService.cancel();
+    }
+
+    /** Открывает страницу исходного кода в системном браузере пользователя. */
+    private void openProjectRepository() {
+        try {
+            if (!Desktop.isDesktopSupported() || !Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                throw new UnsupportedOperationException("Системный браузер недоступен");
+            }
+            Desktop.getDesktop().browse(PROJECT_REPOSITORY);
+        } catch (Exception exception) {
+            ApplicationLogger.error("Не удалось открыть репозиторий проекта", exception);
+            JOptionPane.showMessageDialog(this, "Не удалось открыть страницу проекта:\n" + PROJECT_REPOSITORY,
+                    "GitHub", JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     /** В отладке Chrome видим и обращение к нему всегда выполняется в один поток. */
@@ -350,6 +381,7 @@ public final class RecoveryFrame extends JFrame {
         protected void done() {
             startButton.setEnabled(true);
             yandexLoginButton.setEnabled(true);
+            folderSelectionTree.setSelectionEditingEnabled(true);
             stopButton.setEnabled(false);
             activeRecoveryWorker = null;
             try {

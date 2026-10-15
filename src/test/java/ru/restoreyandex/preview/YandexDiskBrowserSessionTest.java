@@ -32,6 +32,11 @@ class YandexDiskBrowserSessionTest {
     }
 
     @Test
+    void startsBrowserPreviewRequestsNoMoreOftenThanEveryTwoHundredMilliseconds() {
+        assertEquals(200L, YandexDiskBrowserSession.previewRequestIntervalMillis());
+    }
+
+    @Test
     void decodesTheBytesReturnedByChromeWithoutASecondHttpRequest() throws IOException {
         BufferedImage expected = new BufferedImage(37, 19, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();

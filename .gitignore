@@ -1,6 +1,8 @@
 .gradle/
 build/
-.idea/
+# Общие настройки VCS нужны всем разработчикам; персональные данные IDE не храним.
+.idea/*
+!.idea/vcs.xml
 *.log
 yandex-media-recovery.properties
 yandex-preview-recovery.properties

@@ -19,6 +19,7 @@ import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
+import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.nio.file.Path;
@@ -34,6 +35,8 @@ final class FolderSelectionTree extends JPanel {
     private final DirectoryNode placeholderRoot = new DirectoryNode(null, "Выберите корень Яндекс Диска", true);
     private final DefaultTreeModel model = new DefaultTreeModel(placeholderRoot);
     private final JTree tree = new JTree(model);
+    private final JButton selectAllButton = new JButton("Выбрать всё");
+    private boolean selectionEditingEnabled = true;
 
     FolderSelectionTree() {
         super(new BorderLayout(0, 4));
@@ -44,6 +47,7 @@ final class FolderSelectionTree extends JPanel {
             if (value instanceof DirectoryNode node) {
                 JCheckBox checkBox = new JCheckBox(node.toString(), node.selected);
                 checkBox.setOpaque(false);
+                checkBox.setEnabled(selectionEditingEnabled);
                 return checkBox;
             }
             return new JLabel(value.toString());
@@ -51,8 +55,10 @@ final class FolderSelectionTree extends JPanel {
         installLazyLoading();
         installSelectionToggle();
 
-        JButton selectAllButton = new JButton("Выбрать всё");
         selectAllButton.addActionListener(event -> {
+            if (!selectionEditingEnabled) {
+                return;
+            }
             if (model.getRoot() instanceof DirectoryNode root) {
                 setSelection(root, true);
                 tree.repaint();
@@ -82,6 +88,14 @@ final class FolderSelectionTree extends JPanel {
         List<FolderSelectionRule> rules = new ArrayList<>();
         collectRules(root, true, rules);
         return new FolderSelection(rules);
+    }
+
+    /** Блокирует изменение отмеченных папок на время активного восстановления. */
+    void setSelectionEditingEnabled(boolean enabled) {
+        selectionEditingEnabled = enabled;
+        tree.setEnabled(enabled);
+        selectAllButton.setEnabled(enabled);
+        tree.repaint();
     }
 
     private void collectRules(DirectoryNode node, boolean inheritedSelection, List<FolderSelectionRule> rules) {
@@ -117,11 +131,15 @@ final class FolderSelectionTree extends JPanel {
         tree.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent event) {
+                if (!selectionEditingEnabled) {
+                    return;
+                }
                 TreePath path = tree.getPathForLocation(event.getX(), event.getY());
                 if (path == null || !(path.getLastPathComponent() instanceof DirectoryNode node)) {
                     return;
                 }
-                if (event.getX() > tree.getPathBounds(path).x + 16) {
+                Rectangle rowBounds = tree.getPathBounds(path);
+                if (rowBounds != null && rowBounds.contains(event.getPoint())) {
                     setSelection(node, !node.selected);
                     tree.repaint();
                 }

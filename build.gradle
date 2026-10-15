@@ -45,3 +45,48 @@ tasks.named('jar') {
 tasks.named('processResources') {
     from(layout.projectDirectory.file('logo.png'))
 }
+
+def exeOutputDirectory = layout.buildDirectory.dir('exe')
+def packagedLibraries = layout.buildDirectory.dir("install/${project.name}/lib")
+def packagingLauncher = javaToolchains.launcherFor {
+    languageVersion = JavaLanguageVersion.of(21)
+}
+
+/**
+ * Собирает переносимое Windows-приложение с собственным Java Runtime.
+ * Итоговый файл: build/exe/YandexMediaRecovery/YandexMediaRecovery.exe.
+ */
+tasks.register('packageExe', Exec) {
+    group = 'distribution'
+    description = 'Создаёт автономный Windows EXE с Java Runtime через jpackage.'
+    dependsOn(tasks.named('installDist'))
+    inputs.dir(packagedLibraries)
+    outputs.dir(exeOutputDirectory)
+
+    doFirst {
+        if (!System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
+            throw new GradleException('packageExe поддерживается только в Windows.')
+        }
+        File jdkDirectory = packagingLauncher.get().metadata.installationPath.asFile
+        File jpackage = new File(jdkDirectory, 'bin/jpackage.exe')
+        if (!jpackage.isFile()) {
+            throw new GradleException("В JDK 21 не найден jpackage: ${jpackage}")
+        }
+        project.delete(exeOutputDirectory)
+        executable(jpackage.absolutePath)
+        args(
+                '--type', 'app-image',
+                '--dest', exeOutputDirectory.get().asFile.absolutePath,
+                '--name', 'YandexMediaRecovery',
+                '--app-version', project.version.toString(),
+                '--input', packagedLibraries.get().asFile.absolutePath,
+                '--main-jar', "${project.name}-${project.version}.jar",
+                '--main-class', application.mainClass.get()
+        )
+    }
+}
+
+// Обычная команда сборки тоже выпускает launcher, чтобы EXE не было отдельным ручным шагом.
+tasks.named('build') {
+    dependsOn(tasks.named('packageExe'))
+}

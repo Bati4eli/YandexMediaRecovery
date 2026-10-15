@@ -35,7 +35,7 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
     private static final String PREVIEW_IMAGE_SELECTOR = "img.scalable-preview__image";
     private static final String VISIBLE_PREVIEW_IMAGE_SELECTOR = PREVIEW_IMAGE_SELECTOR + ":visible";
     private static final long PREVIEW_WAIT_MILLIS = 30_000;
-    private static final long MINIMUM_REQUEST_INTERVAL_MILLIS = 2_000;
+    private static final long MINIMUM_REQUEST_INTERVAL_MILLIS = 200;
     private final RequestRateLimiter requestRateLimiter = new RequestRateLimiter(MINIMUM_REQUEST_INTERVAL_MILLIS);
     private volatile Playwright playwright;
     private volatile BrowserContext context;
@@ -208,6 +208,11 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
      */
     static Page.WaitForFunctionOptions previewImageWaitOptions() {
         return new Page.WaitForFunctionOptions().setTimeout(PREVIEW_WAIT_MILLIS);
+    }
+
+    /** Возвращает минимальный интервал между запусками последовательных запросов к просмотру Яндекс Диска. */
+    static long previewRequestIntervalMillis() {
+        return MINIMUM_REQUEST_INTERVAL_MILLIS;
     }
 
     /** Ожидает ручного входа и появления корня файлов Диска без ввода учётных данных программой. */
