@@ -47,6 +47,7 @@ tasks.named('processResources') {
 }
 
 def exeOutputDirectory = layout.buildDirectory.dir('exe')
+def exeApplicationDirectory = layout.buildDirectory.dir('exe/YandexMediaRecovery')
 def packagedLibraries = layout.buildDirectory.dir("install/${project.name}/lib")
 def packagingLauncher = javaToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(21)
@@ -93,7 +94,7 @@ tasks.register('packageWindowsZip', Zip) {
     dependsOn(tasks.named('packageExe'))
     archiveFileName = "YandexMediaRecovery-${project.version}-windows.zip"
     destinationDirectory = layout.buildDirectory.dir('release')
-    from(exeOutputDirectory) {
+    from(exeApplicationDirectory) {
         into('YandexMediaRecovery')
     }
 }
