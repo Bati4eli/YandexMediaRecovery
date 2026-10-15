@@ -86,7 +86,20 @@ tasks.register('packageExe', Exec) {
     }
 }
 
-// Обычная команда сборки тоже выпускает launcher, чтобы EXE не было отдельным ручным шагом.
+/** Упаковывает целую папку приложения, потому что launcher EXE требует app/*.cfg и runtime рядом с собой. */
+tasks.register('packageWindowsZip', Zip) {
+    group = 'distribution'
+    description = 'Создаёт переносимый ZIP с EXE, настройками launcher и Java Runtime.'
+    dependsOn(tasks.named('packageExe'))
+    archiveFileName = "YandexMediaRecovery-${project.version}-windows.zip"
+    destinationDirectory = layout.buildDirectory.dir('release')
+    from(exeOutputDirectory) {
+        into('YandexMediaRecovery')
+    }
+}
+
+// Обычная команда сборки выпускает launcher и готовый переносимый архив.
 tasks.named('build') {
     dependsOn(tasks.named('packageExe'))
+    dependsOn(tasks.named('packageWindowsZip'))
 }
