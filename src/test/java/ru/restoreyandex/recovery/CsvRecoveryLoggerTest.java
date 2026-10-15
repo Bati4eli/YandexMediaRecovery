@@ -21,22 +21,21 @@ class CsvRecoveryLoggerTest {
         Path source = Path.of("C:/Фото, архив/свадьба.jpg");
         try (CsvRecoveryLogger logger = new CsvRecoveryLogger(temporaryDirectory)) {
             logger.onStarted(1);
-            logger.onFileProcessed(new RecoveryEvent(1, 1, source, RecoveryOutcome.PREVIEW_SAVED, "saved"));
+            logger.onFileProcessed(new RecoveryEvent(1, 1, source, RecoveryOutcome.WEB_PREVIEW_SAVED, "saved"));
 
             List<String> lines = Files.readAllLines(logger.file());
             assertEquals("\"path\",\"file_name\",\"status\"", lines.get(0));
-            assertEquals("\"" + source.toAbsolutePath().normalize() + "\",\"свадьба.jpg\",\"PREVIEW_SAVED\"", lines.get(1));
+            assertEquals("\"" + source.toAbsolutePath().normalize() + "\",\"свадьба.jpg\",\"WEBPV_SAVED\"", lines.get(1));
         }
     }
 
     @Test
-    void mapsExistingTargetToTheRequestedAllreadyOkStatus() throws Exception {
+    void doesNotWriteAnEntryWhenExistingTargetWasNotChanged() throws Exception {
         try (CsvRecoveryLogger logger = new CsvRecoveryLogger(temporaryDirectory)) {
             logger.onFileProcessed(new RecoveryEvent(1, 1, Path.of("C:/photo.jpg"),
                     RecoveryOutcome.ALREADY_OK, "already exists"));
 
-            assertEquals("\"" + Path.of("C:/photo.jpg").toAbsolutePath().normalize() + "\",\"photo.jpg\",\"ALREADY_OK\"",
-                    Files.readAllLines(logger.file()).get(1));
+            assertEquals(1, Files.readAllLines(logger.file()).size());
         }
     }
 }

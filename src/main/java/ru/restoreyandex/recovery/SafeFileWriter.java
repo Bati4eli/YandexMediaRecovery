@@ -27,7 +27,7 @@ final class SafeFileWriter {
 
     /**
      * Сохраняет PNG-превью. Замена разрешается только для заранее выбранного
-     * пути PREW_, поэтому оригиналы этим методом не затрагиваются.
+     * пути PREW_, WEBPV_ или MINIPV_, поэтому оригиналы этим методом не затрагиваются.
      */
     void writePreview(BufferedImage image, Path target, boolean replaceExisting) throws IOException {
         prepareParent(target);

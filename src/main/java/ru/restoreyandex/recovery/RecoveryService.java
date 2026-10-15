@@ -7,10 +7,10 @@ import ru.restoreyandex.domain.RecoveryOutcome;
 import ru.restoreyandex.domain.RecoveryPlan;
 import ru.restoreyandex.domain.RecoveryReport;
 import ru.restoreyandex.media.DefaultMediaInspector;
+import ru.restoreyandex.media.MediaExtensions;
 import ru.restoreyandex.media.MediaInspector;
 import ru.restoreyandex.preview.PreviewExtractor;
 import ru.restoreyandex.preview.WindowsShellPreviewExtractor;
-import ru.restoreyandex.preview.CloudFirstPreviewExtractor;
 import ru.restoreyandex.preview.CloudPreviewExtractor;
 import ru.restoreyandex.preview.YandexDiskBrowserPreviewExtractor;
 import ru.restoreyandex.logging.ApplicationLogger;
@@ -36,27 +36,36 @@ import java.util.stream.Stream;
 public final class RecoveryService {
     private final RecoveryPlanner planner;
     private final MediaInspector inspector;
-    private final PreviewExtractor previewExtractor;
+    private final PreviewExtractor largePreviewExtractor;
     private final CloudPreviewExtractor cloudPreviewExtractor;
+    private final PreviewExtractor miniPreviewExtractor;
     private final SafeFileWriter fileWriter;
 
     /** Создаёт сервис восстановления для Windows. */
     public RecoveryService() {
         this(new RecoveryPlanner(), new DefaultMediaInspector(),
-                new WindowsShellPreviewExtractor(), new YandexDiskBrowserPreviewExtractor(), new SafeFileWriter());
+                new WindowsShellPreviewExtractor()::extractLarge, new YandexDiskBrowserPreviewExtractor(),
+                new WindowsShellPreviewExtractor()::extractMini, new SafeFileWriter());
     }
 
     RecoveryService(RecoveryPlanner planner, MediaInspector inspector, PreviewExtractor previewExtractor,
                     SafeFileWriter fileWriter) {
-        this(planner, inspector, previewExtractor, ignored -> Optional.empty(), fileWriter);
+        this(planner, inspector, previewExtractor, ignored -> Optional.empty(), ignored -> Optional.empty(), fileWriter);
     }
 
     RecoveryService(RecoveryPlanner planner, MediaInspector inspector, PreviewExtractor previewExtractor,
                     CloudPreviewExtractor cloudPreviewExtractor, SafeFileWriter fileWriter) {
+        this(planner, inspector, previewExtractor, cloudPreviewExtractor, ignored -> Optional.empty(), fileWriter);
+    }
+
+    RecoveryService(RecoveryPlanner planner, MediaInspector inspector, PreviewExtractor largePreviewExtractor,
+                    CloudPreviewExtractor cloudPreviewExtractor, PreviewExtractor miniPreviewExtractor,
+                    SafeFileWriter fileWriter) {
         this.planner = Objects.requireNonNull(planner);
         this.inspector = Objects.requireNonNull(inspector);
-        this.previewExtractor = Objects.requireNonNull(previewExtractor);
+        this.largePreviewExtractor = Objects.requireNonNull(largePreviewExtractor);
         this.cloudPreviewExtractor = Objects.requireNonNull(cloudPreviewExtractor);
+        this.miniPreviewExtractor = Objects.requireNonNull(miniPreviewExtractor);
         this.fileWriter = Objects.requireNonNull(fileWriter);
     }
 
@@ -93,8 +102,6 @@ public final class RecoveryService {
         Counter counter = new Counter();
         MediaInspector runInspector = new ru.restoreyandex.media.TimedMediaInspector(inspector,
                 Duration.ofSeconds(8), options.parallelism());
-        PreviewExtractor runPreviewExtractor = new CloudFirstPreviewExtractor(sourceRoot, cloudPreviewExtractor,
-                previewExtractor);
         ExecutorService executor = Executors.newFixedThreadPool(options.parallelism());
         try {
             ExecutorCompletionService<IndexedEvent> completion = new ExecutorCompletionService<>(executor);
@@ -104,7 +111,7 @@ public final class RecoveryService {
                 completion.submit(() -> {
                     listener.onFileStarted(source, ordinal, files.size());
                     return new IndexedEvent(source, recoverOne(source, sourceRoot, destinationRoot,
-                            runInspector, runPreviewExtractor, options.overwritePreviews(), counter));
+                            runInspector, options, counter));
                 });
             }
             for (int completed = 1; completed <= files.size(); completed++) {
@@ -129,14 +136,16 @@ public final class RecoveryService {
     }
 
     private RecoveryEvent recoverOne(Path source, Path sourceRoot, Path destinationRoot, MediaInspector runInspector,
-                                     PreviewExtractor runPreviewExtractor, boolean overwritePreviews, Counter counter) {
+                                     RecoveryOptions options, Counter counter) {
         counter.scanned.incrementAndGet();
         try {
-            RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, runInspector, overwritePreviews);
+            RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, runInspector,
+                    options.overwritePreviews());
             return switch (plan.action()) {
-                case COPY_ORIGINAL -> copy(plan, counter);
-                case WRITE_PREVIEW -> writePreview(plan, runPreviewExtractor, overwritePreviews, counter);
-                case SKIP_DESTINATION_EXISTS, SKIP_UNSUPPORTED -> skipped(plan, counter);
+                case COPY_ORIGINAL -> copy(plan, options.deleteLowerQualityPreviews(), counter);
+                case WRITE_PREVIEW -> writePreview(plan, sourceRoot, options, counter);
+                case SKIP_DESTINATION_EXISTS -> skipped(plan, counter);
+                case SKIP_UNSUPPORTED -> skipped(plan, counter);
             };
         } catch (Exception exception) {
             counter.failed.incrementAndGet();
@@ -145,36 +154,129 @@ public final class RecoveryService {
         }
     }
 
-    private RecoveryEvent copy(RecoveryPlan plan, Counter counter) throws IOException {
+    private RecoveryEvent copy(RecoveryPlan plan, boolean deleteLowerQualityPreviews, Counter counter) throws IOException {
         try {
             fileWriter.copy(plan.source(), plan.destination());
             counter.copied.incrementAndGet();
+            deleteLowerQualityPreviews(plan.source(), plan.destination(), RecoveryOutcome.COPIED,
+                    deleteLowerQualityPreviews, counter);
             return event(plan.source(), RecoveryOutcome.COPIED, "Скопирован: " + plan.destination());
         } catch (FileAlreadyExistsException exception) {
-            counter.skipped.incrementAndGet();
-            ApplicationLogger.info("Оригинал уже существует и пропущен: " + plan.destination());
-            return event(plan.source(), RecoveryOutcome.ALREADY_OK, "Уже существует: " + plan.destination());
+            return skipped(plan, counter);
         }
     }
 
-    private RecoveryEvent writePreview(RecoveryPlan plan, PreviewExtractor runPreviewExtractor,
-                                       boolean overwritePreviews, Counter counter) throws IOException {
-        Optional<BufferedImage> preview = runPreviewExtractor.extract(plan.source());
-        if (preview.isEmpty()) {
-            counter.previewsUnavailable.incrementAndGet();
-            return event(plan.source(), RecoveryOutcome.NO_FILE,
-                    "Превью недоступно в Яндекс Диске и кэше Windows");
+    /**
+     * Сначала получает большое превью из Windows Explorer, затем обращается к
+     * браузеру Яндекс Диска и только последним шагом берёт маленькую обложку.
+     * Порядок записи по качеству остаётся {@code WEBPV_}, {@code PREW_},
+     * {@code MINIPV_}: появление более качественного результата удаляет худшие.
+     */
+    private RecoveryEvent writePreview(RecoveryPlan plan, Path sourceRoot,
+                                       RecoveryOptions options, Counter counter) throws IOException {
+        Path webTarget = previewTarget(plan, MediaExtensions.webPreviewName(plan.source()));
+        Path explorerTarget = previewTarget(plan, MediaExtensions.previewName(plan.source()));
+        Path miniTarget = previewTarget(plan, MediaExtensions.miniPreviewName(plan.source()));
+        if (Files.exists(webTarget)) {
+            return existingPreview(plan, RecoveryOutcome.WEB_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
+        if (Files.exists(explorerTarget) && !options.overwritePreviews()) {
+            return existingPreview(plan, RecoveryOutcome.EXPLORER_PREVIEW_SAVED,
+                    options.deleteLowerQualityPreviews(), counter);
+        }
+        if (Files.exists(miniTarget) && !options.overwritePreviews()) {
+            return existingPreview(plan, RecoveryOutcome.MINI_PREVIEW_SAVED,
+                    options.deleteLowerQualityPreviews(), counter);
+        }
+
+        Optional<BufferedImage> explorerPreview = largePreviewExtractor.extract(plan.source());
+        if (explorerPreview.isPresent()) {
+            return savePreview(plan.source(), explorerPreview.get(), explorerTarget, options.overwritePreviews(),
+                    RecoveryOutcome.EXPLORER_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
+        }
+
+        Optional<BufferedImage> webPreview = cloudPreviewExtractor.extract(sourceRoot.relativize(plan.source()));
+        if (webPreview.isPresent()) {
+            return savePreview(plan.source(), webPreview.get(), webTarget, options.overwritePreviews(),
+                    RecoveryOutcome.WEB_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
+        }
+        if (Files.exists(explorerTarget)) {
+            return existingPreview(plan, RecoveryOutcome.EXPLORER_PREVIEW_SAVED,
+                    options.deleteLowerQualityPreviews(), counter);
+        }
+        Optional<BufferedImage> miniPreview = miniPreviewExtractor.extract(plan.source());
+        if (miniPreview.isPresent()) {
+            return savePreview(plan.source(), miniPreview.get(), miniTarget, options.overwritePreviews(),
+                    RecoveryOutcome.MINI_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
+        }
+        counter.previewsUnavailable.incrementAndGet();
+        return event(plan.source(), RecoveryOutcome.NO_FILE, "Большое и маленькое превью недоступны");
+    }
+
+    private RecoveryEvent savePreview(Path source, BufferedImage preview, Path destination,
+                                      boolean overwritePreviews, RecoveryOutcome outcome,
+                                      boolean deleteLowerQualityPreviews, Counter counter) throws IOException {
         try {
-            fileWriter.writePreview(preview.get(), plan.destination(), overwritePreviews);
+            fileWriter.writePreview(preview, destination, overwritePreviews);
             counter.previewsSaved.incrementAndGet();
-            return event(plan.source(), RecoveryOutcome.PREVIEW_SAVED,
-                    "Превью сохранено: " + plan.destination());
+            deleteLowerQualityPreviews(source, destination.resolveSibling(source.getFileName()), outcome,
+                    deleteLowerQualityPreviews, counter);
+            return event(source, outcome,
+                    "Превью сохранено: " + destination);
         } catch (FileAlreadyExistsException exception) {
             counter.skipped.incrementAndGet();
-            ApplicationLogger.info("Превью уже существует и пропущено: " + plan.destination());
-            return event(plan.source(), RecoveryOutcome.ALREADY_OK, "Уже существует: " + plan.destination());
+            ApplicationLogger.info("Превью уже существует и пропущено: " + destination);
+            return event(source, RecoveryOutcome.ALREADY_OK, "Уже существует: " + destination);
         }
+    }
+
+    private RecoveryEvent existingPreview(RecoveryPlan plan, RecoveryOutcome retainedPreview,
+                                          boolean deleteLowerQualityPreviews, Counter counter) {
+        int deleted = deleteLowerQualityPreviews(plan.source(), plan.destination(), retainedPreview,
+                deleteLowerQualityPreviews, counter);
+        if (deleted > 0) {
+            return event(plan.source(), RecoveryOutcome.PREVIEWS_CLEANED,
+                    "Удалены менее качественные превью: " + deleted);
+        }
+        counter.skipped.incrementAndGet();
+        return event(plan.source(), RecoveryOutcome.ALREADY_OK, "Результат уже существует");
+    }
+
+    private Path previewTarget(RecoveryPlan plan, String previewName) {
+        return plan.destination().resolveSibling(previewName);
+    }
+
+    /** Удаляет только имена превью, которые находятся ниже сохранённого качества. */
+    private int deleteLowerQualityPreviews(Path source, Path originalTarget, RecoveryOutcome retained,
+                                           boolean enabled, Counter counter) {
+        if (!enabled) {
+            return 0;
+        }
+        List<Path> targets = switch (retained) {
+            case COPIED -> List.of(previewTarget(originalTarget, MediaExtensions.webPreviewName(source)),
+                    previewTarget(originalTarget, MediaExtensions.previewName(source)),
+                    previewTarget(originalTarget, MediaExtensions.miniPreviewName(source)));
+            case WEB_PREVIEW_SAVED -> List.of(previewTarget(originalTarget, MediaExtensions.previewName(source)),
+                    previewTarget(originalTarget, MediaExtensions.miniPreviewName(source)));
+            case EXPLORER_PREVIEW_SAVED -> List.of(previewTarget(originalTarget, MediaExtensions.miniPreviewName(source)));
+            case MINI_PREVIEW_SAVED, PREVIEWS_CLEANED, ALREADY_OK, NO_FILE -> List.of();
+        };
+        int deleted = 0;
+        for (Path target : targets) {
+            try {
+                if (Files.deleteIfExists(target)) {
+                    deleted++;
+                    counter.previewsDeleted.incrementAndGet();
+                }
+            } catch (IOException exception) {
+                ApplicationLogger.error("Не удалось удалить менее качественное превью: " + target, exception);
+            }
+        }
+        return deleted;
+    }
+
+    private Path previewTarget(Path originalTarget, String previewName) {
+        return originalTarget.resolveSibling(previewName);
     }
 
     private RecoveryEvent skipped(RecoveryPlan plan, Counter counter) {
@@ -210,12 +312,13 @@ public final class RecoveryService {
         private final AtomicInteger scanned = new AtomicInteger();
         private final AtomicInteger copied = new AtomicInteger();
         private final AtomicInteger previewsSaved = new AtomicInteger();
+        private final AtomicInteger previewsDeleted = new AtomicInteger();
         private final AtomicInteger skipped = new AtomicInteger();
         private final AtomicInteger previewsUnavailable = new AtomicInteger();
         private final AtomicInteger failed = new AtomicInteger();
 
         private RecoveryReport toReport() {
-            return new RecoveryReport(scanned.get(), copied.get(), previewsSaved.get(), skipped.get(),
+            return new RecoveryReport(scanned.get(), copied.get(), previewsSaved.get(), previewsDeleted.get(), skipped.get(),
                     previewsUnavailable.get(), failed.get());
         }
     }

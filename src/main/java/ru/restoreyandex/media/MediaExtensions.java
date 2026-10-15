@@ -30,11 +30,25 @@ public final class MediaExtensions {
         return VIDEO_EXTENSIONS.contains(extension) ? MediaType.VIDEO : MediaType.UNSUPPORTED;
     }
 
-    /** Строит имя PNG-превью с обязательным префиксом {@code PREW_}. */
+    /** Строит имя PNG-превью из локального кэша Windows Explorer с префиксом {@code PREW_}. */
     public static String previewName(Path source) {
+        return previewName(source, "PREW_");
+    }
+
+    /** Строит имя PNG-превью, загруженного из веб-клиента Яндекс Диска, с префиксом {@code WEBPV_}. */
+    public static String webPreviewName(Path source) {
+        return previewName(source, "WEBPV_");
+    }
+
+    /** Строит имя маленькой обложки файла, полученной из Windows Explorer. */
+    public static String miniPreviewName(Path source) {
+        return previewName(source, "MINIPV_");
+    }
+
+    private static String previewName(Path source, String prefix) {
         String name = source.getFileName().toString();
         int dot = name.lastIndexOf('.');
         String baseName = dot > 0 ? name.substring(0, dot) : name;
-        return "PREW_" + baseName + ".png";
+        return prefix + baseName + ".png";
     }
 }

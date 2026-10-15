@@ -14,6 +14,7 @@ public final class PropertiesSettingsRepository {
     private static final String SOURCE_KEY = "source.folder";
     private static final String DESTINATION_KEY = "destination.folder";
     private static final String OVERWRITE_PREVIEWS_KEY = "previews.overwrite";
+    private static final String DELETE_LOWER_QUALITY_PREVIEWS_KEY = "previews.delete-lower-quality";
     private static final String PARALLELISM_KEY = "processing.parallelism";
     private final Path file;
     private final Path legacyFile;
@@ -46,6 +47,7 @@ public final class PropertiesSettingsRepository {
                     pathOrDefault(properties.getProperty(SOURCE_KEY), RecoverySettings.DEFAULT_SOURCE),
                     pathOrDefault(properties.getProperty(DESTINATION_KEY), RecoverySettings.DEFAULT_DESTINATION),
                     Boolean.parseBoolean(properties.getProperty(OVERWRITE_PREVIEWS_KEY, "false")),
+                    Boolean.parseBoolean(properties.getProperty(DELETE_LOWER_QUALITY_PREVIEWS_KEY, "true")),
                     parallelismOrDefault(properties.getProperty(PARALLELISM_KEY)));
         } catch (IOException | IllegalArgumentException exception) {
             ApplicationLogger.error("Не удалось загрузить настройки восстановления", exception);
@@ -59,6 +61,8 @@ public final class PropertiesSettingsRepository {
         properties.setProperty(SOURCE_KEY, settings.sourceFolder().toAbsolutePath().normalize().toString());
         properties.setProperty(DESTINATION_KEY, settings.destinationFolder().toAbsolutePath().normalize().toString());
         properties.setProperty(OVERWRITE_PREVIEWS_KEY, Boolean.toString(settings.overwritePreviews()));
+        properties.setProperty(DELETE_LOWER_QUALITY_PREVIEWS_KEY,
+                Boolean.toString(settings.deleteLowerQualityPreviews()));
         properties.setProperty(PARALLELISM_KEY, Integer.toString(settings.parallelism()));
         Path parent = file.getParent();
         if (parent != null) {
@@ -71,7 +75,7 @@ public final class PropertiesSettingsRepository {
 
     private RecoverySettings defaults() {
         return new RecoverySettings(RecoverySettings.DEFAULT_SOURCE, RecoverySettings.DEFAULT_DESTINATION,
-                false, RecoverySettings.DEFAULT_PARALLELISM);
+                false, true, RecoverySettings.DEFAULT_PARALLELISM);
     }
 
     private Path settingsFileToLoad() {

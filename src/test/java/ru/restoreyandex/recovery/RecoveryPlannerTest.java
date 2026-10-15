@@ -46,7 +46,7 @@ class RecoveryPlannerTest {
     }
 
     @Test
-    void unreadableSupportedFileUsesPngPreviewName() throws Exception {
+    void unreadableSupportedFileKeepsOriginalTargetForSourceSelection() throws Exception {
         Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));
         Path source = Files.writeString(sourceRoot.resolve("IMG_1.jpg"), "placeholder");
@@ -54,11 +54,11 @@ class RecoveryPlannerTest {
         RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, unreadableImage());
 
         assertEquals(RecoveryAction.WRITE_PREVIEW, plan.action());
-        assertEquals(destinationRoot.resolve("PREW_IMG_1.png"), plan.destination());
+        assertEquals(destinationRoot.resolve("IMG_1.jpg"), plan.destination());
     }
 
     @Test
-    void existingPreviewAlsoPreventsRepeatedRecovery() throws Exception {
+    void existingExplorerPreviewIsPassedToServiceForQualityCheck() throws Exception {
         Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));
         Path source = Files.writeString(sourceRoot.resolve("IMG_1.jpg"), "placeholder");
@@ -66,7 +66,19 @@ class RecoveryPlannerTest {
 
         RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, unreadableImage());
 
-        assertEquals(RecoveryAction.SKIP_DESTINATION_EXISTS, plan.action());
+        assertEquals(RecoveryAction.WRITE_PREVIEW, plan.action());
+    }
+
+    @Test
+    void existingBrowserPreviewIsPassedToServiceForQualityCheck() throws Exception {
+        Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Path source = Files.writeString(sourceRoot.resolve("IMG_1.jpg"), "placeholder");
+        Files.writeString(destinationRoot.resolve("WEBPV_IMG_1.png"), "browser result");
+
+        RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, unreadableImage());
+
+        assertEquals(RecoveryAction.WRITE_PREVIEW, plan.action());
     }
 
     @Test
@@ -79,7 +91,7 @@ class RecoveryPlannerTest {
         RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, unreadableImage(), true);
 
         assertEquals(RecoveryAction.WRITE_PREVIEW, plan.action());
-        assertEquals(destinationRoot.resolve("PREW_IMG_1.png"), plan.destination());
+        assertEquals(destinationRoot.resolve("IMG_1.jpg"), plan.destination());
     }
 
     @Test

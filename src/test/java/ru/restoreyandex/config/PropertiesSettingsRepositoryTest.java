@@ -14,14 +14,15 @@ class PropertiesSettingsRepositoryTest {
     Path temporaryDirectory;
 
     @Test
-    void persistsPreviewReplacementAndParallelism() throws Exception {
+    void persistsPreviewSettingsAndParallelism() throws Exception {
         Path propertiesFile = temporaryDirectory.resolve("settings.properties");
-        RecoverySettings settings = new RecoverySettings(Path.of("C:/source"), Path.of("D:/destination"), true, 7);
+        RecoverySettings settings = new RecoverySettings(Path.of("C:/source"), Path.of("D:/destination"), true, false, 7);
 
         new PropertiesSettingsRepository(propertiesFile).save(settings);
         RecoverySettings loaded = new PropertiesSettingsRepository(propertiesFile).load();
 
         assertTrue(loaded.overwritePreviews());
+        assertEquals(false, loaded.deleteLowerQualityPreviews());
         assertEquals(7, loaded.parallelism());
     }
 

@@ -24,8 +24,9 @@ public final class RecoveryPlanner {
     }
 
     /**
-     * Планирует восстановление с учётом разрешения на обновление только
-     * существующего PREW_-превью; оригинал в папке назначения всегда защищён.
+     * Планирует восстановление с учётом разрешения на обновление превью.
+     * Оригинал в папке назначения всегда защищён, а приоритет превью
+     * определяется сервисом после проверки доступных источников.
      */
     public RecoveryPlan plan(Path source, Path sourceRoot, Path destinationRoot, MediaInspector inspector,
                              boolean overwritePreviews) {
@@ -44,8 +45,7 @@ public final class RecoveryPlanner {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.SKIP_UNSUPPORTED, hintedType);
         }
 
-        Path previewTarget = originalTarget.resolveSibling(MediaExtensions.previewName(source));
-        if (Files.exists(originalTarget) || (Files.exists(previewTarget) && !overwritePreviews)) {
+        if (Files.exists(originalTarget)) {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.SKIP_DESTINATION_EXISTS, hintedType);
         }
 
@@ -53,6 +53,6 @@ public final class RecoveryPlanner {
         if (inspection.readable()) {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.COPY_ORIGINAL, inspection.type());
         }
-        return new RecoveryPlan(source, previewTarget, RecoveryAction.WRITE_PREVIEW, inspection.type());
+        return new RecoveryPlan(source, originalTarget, RecoveryAction.WRITE_PREVIEW, inspection.type());
     }
 }

@@ -44,7 +44,8 @@ public final class RecoveryFrame extends JFrame {
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
     private final JTextArea logArea = new JTextArea();
-    private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью PREW_");
+    private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью");
+    private final JCheckBox deleteLowerQualityPreviewsCheckBox = new JCheckBox("Удалять менее качественные превью");
     private final JComboBox<Integer> parallelismComboBox = new JComboBox<>(
             IntStream.rangeClosed(1, 10).boxed().toArray(Integer[]::new));
     private final JButton yandexLoginButton = new JButton("Войти в Яндекс Диск…");
@@ -59,6 +60,7 @@ public final class RecoveryFrame extends JFrame {
         sourceField.setText(settings.sourceFolder().toString());
         destinationField.setText(settings.destinationFolder().toString());
         overwritePreviewsCheckBox.setSelected(settings.overwritePreviews());
+        deleteLowerQualityPreviewsCheckBox.setSelected(settings.deleteLowerQualityPreviews());
         parallelismComboBox.setSelectedItem(settings.parallelism());
         initialize();
     }
@@ -84,9 +86,11 @@ public final class RecoveryFrame extends JFrame {
                 event -> chooseFolder(destinationField, "Выберите корень резервной копии"));
         JPanel options = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         options.add(overwritePreviewsCheckBox);
+        options.add(deleteLowerQualityPreviewsCheckBox);
         options.add(new JLabel("   Потоков: "));
         options.add(parallelismComboBox);
         overwritePreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
+        deleteLowerQualityPreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
         parallelismComboBox.addActionListener(event -> saveCurrentSettings());
 
         GridBagConstraints optionConstraints = new GridBagConstraints();
@@ -148,7 +152,8 @@ public final class RecoveryFrame extends JFrame {
     private void startRecovery(ActionEvent ignored) {
         Path source = Path.of(sourceField.getText());
         Path destination = Path.of(destinationField.getText());
-        RecoveryOptions options = new RecoveryOptions(overwritePreviewsCheckBox.isSelected(), selectedParallelism());
+        RecoveryOptions options = new RecoveryOptions(overwritePreviewsCheckBox.isSelected(),
+                deleteLowerQualityPreviewsCheckBox.isSelected(), selectedParallelism());
         saveCurrentSettings();
         startButton.setEnabled(false);
         yandexLoginButton.setEnabled(false);
@@ -194,14 +199,17 @@ public final class RecoveryFrame extends JFrame {
         progressBar.setMaximum(Math.max(event.total(), 1));
         progressBar.setValue(event.processed());
         progressBar.setString(event.processed() + " / " + event.total());
-        appendLog(RecoveryLogLineFormatter.format(event, sourceRoot) + "\n");
+        if (event.outcome() != ru.restoreyandex.domain.RecoveryOutcome.ALREADY_OK) {
+            appendLog(RecoveryLogLineFormatter.format(event, sourceRoot) + "\n");
+        }
         logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
     private void saveCurrentSettings() {
         try {
             settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
-                    overwritePreviewsCheckBox.isSelected(), selectedParallelism()));
+                    overwritePreviewsCheckBox.isSelected(), deleteLowerQualityPreviewsCheckBox.isSelected(),
+                    selectedParallelism()));
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось сохранить настройки", exception);
             JOptionPane.showMessageDialog(this, "Не удалось сохранить настройки: " + exception.getMessage(),

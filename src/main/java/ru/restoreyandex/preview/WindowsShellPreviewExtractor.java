@@ -37,9 +37,9 @@ import ru.restoreyandex.logging.ApplicationLogger;
  *     <li>инициализирует COM в текущем рабочем потоке;</li>
  *     <li>создаёт Shell-объект для абсолютного пути через
  *         {@code SHCreateItemFromParsingName};</li>
- *     <li>сначала запрашивает у {@code IShellItemImageFactory} объект
- *         {@code HBITMAP} до 2048×2048 пикселей, затем при отсутствии такого
- *         кэша — запасной вариант до 512×512 пикселей;</li>
+ *     <li>по отдельному вызову запрашивает у {@code IShellItemImageFactory}
+ *         объект {@code HBITMAP} до 2048×2048 пикселей либо маленькую обложку
+ *         до 512×512 пикселей;</li>
  *     <li>передаёт пиксели {@code HBITMAP} в {@link BufferedImage}, который
  *         затем сохраняет сервис восстановления.</li>
  * </ol>
@@ -50,8 +50,9 @@ import ru.restoreyandex.logging.ApplicationLogger;
  * в кэше Проводника, Windows отдаёт её. Иначе установленный провайдер Яндекс
  * Диска может вернуть своё облачное превью. Дополнительный флаг
  * {@code INCACHEONLY} не разрешает Shell ждать загрузки полного файла: берётся
- * только уже доступная миниатюра. Когда её нет, метод возвращает пустой
- * результат, а вызывающий код фиксирует
+ * только уже доступная миниатюра. Когда большой запрос не дал результата,
+ * сервис может обратиться к браузеру Яндекс Диска и лишь затем вызвать метод
+ * маленькой обложки. Когда все источники недоступны, сервис фиксирует
  * {@code NO_FILE}.</p>
  *
  * <p>Владение нативными ресурсами остаётся в этом классе: после преобразования
@@ -67,7 +68,7 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
     private static final int IN_CACHE_ONLY = 0x10;
     private static final int BIGGER_SIZE_OK = 0x1;
     private static final int HIGH_RESOLUTION_SIZE = 2048;
-    private static final int FALLBACK_SIZE = 512;
+    private static final int MINIATURE_SIZE = 512;
     private static final int DIB_RGB_COLORS = 0;
     private static final int BI_RGB = 0;
 
@@ -79,6 +80,27 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
      */
     @Override
     public Optional<BufferedImage> extract(Path file) {
+        return extractLarge(file);
+    }
+
+    /**
+     * Возвращает только большое локальное превью из кэша Explorer. Запрос не
+     * понижает требуемый размер, поэтому маленькая обложка не будет ошибочно
+     * сохранена как качественное {@code PREW_}-превью.
+     */
+    public Optional<BufferedImage> extractLarge(Path file) {
+        return extract(file, HIGH_RESOLUTION_SIZE, THUMBNAIL_ONLY | IN_CACHE_ONLY | BIGGER_SIZE_OK);
+    }
+
+    /**
+     * Возвращает маленькую обложку файла только как последний резервный
+     * вариант. Вызывающий код сохраняет её с отдельным префиксом {@code MINIPV_}.
+     */
+    public Optional<BufferedImage> extractMini(Path file) {
+        return extract(file, MINIATURE_SIZE, THUMBNAIL_ONLY | IN_CACHE_ONLY);
+    }
+
+    private Optional<BufferedImage> extract(Path file, int requestedSize, int flags) {
         if (!isWindows()) {
             return Optional.empty();
         }
@@ -96,7 +118,7 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
                 return Optional.empty();
             }
             shellItem = reference.getValue();
-            Optional<WinDef.HBITMAP> bitmap = getBestAvailableBitmap(shellItem);
+            Optional<WinDef.HBITMAP> bitmap = getBitmap(shellItem, requestedSize, flags);
             if (bitmap.isEmpty()) {
                 return Optional.empty();
             }
@@ -114,18 +136,6 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
             }
             Ole32.INSTANCE.CoUninitialize();
         }
-    }
-
-    /**
-     * Запрашивает максимальное уже закэшированное превью. При отсутствии
-     * большой версии повторяет запрос для 512 пикселей, чтобы не терять
-     * единственное доступное, но менее детальное изображение.
-     */
-    private Optional<WinDef.HBITMAP> getBestAvailableBitmap(Pointer shellItem) {
-        Optional<WinDef.HBITMAP> highResolution = getBitmap(shellItem, HIGH_RESOLUTION_SIZE,
-                THUMBNAIL_ONLY | IN_CACHE_ONLY | BIGGER_SIZE_OK);
-        return highResolution.isPresent() ? highResolution
-                : getBitmap(shellItem, FALLBACK_SIZE, THUMBNAIL_ONLY | IN_CACHE_ONLY);
     }
 
     /** Запрашивает миниатюру указанного размера без возврата иконки формата. */

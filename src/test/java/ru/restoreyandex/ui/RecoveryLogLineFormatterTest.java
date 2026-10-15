@@ -14,10 +14,10 @@ class RecoveryLogLineFormatterTest {
     void showsOnlyPathRelativeToConfiguredSourceFolder() {
         Path sourceRoot = Path.of("C:/media/source").toAbsolutePath();
         Path source = sourceRoot.resolve("2005/Дача/IMG_0198.jpg");
-        RecoveryEvent event = new RecoveryEvent(1, 1, source, RecoveryOutcome.PREVIEW_SAVED,
-                "Превью сохранено: D:/backup/2005/Дача/PREW_IMG_0198.png");
+        RecoveryEvent event = new RecoveryEvent(1, 1, source, RecoveryOutcome.WEB_PREVIEW_SAVED,
+                "Превью сохранено: D:/backup/2005/Дача/WEBPV_IMG_0198.png");
 
-        assertEquals("🖼️ PREVIEW_SAVED — 2005\\Дача\\IMG_0198.jpg",
+        assertEquals("🌐 WEBPV_SAVED — 2005\\Дача\\IMG_0198.jpg",
                 RecoveryLogLineFormatter.format(event, sourceRoot));
     }
 

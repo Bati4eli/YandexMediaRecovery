@@ -41,6 +41,9 @@ public final class CsvRecoveryLogger implements RecoveryListener, AutoCloseable 
      */
     @Override
     public void onFileProcessed(RecoveryEvent event) {
+        if (event.outcome() == RecoveryOutcome.ALREADY_OK) {
+            return;
+        }
         try {
             writer.write(csv(event.source().toAbsolutePath().normalize().toString()));
             writer.write(',');
