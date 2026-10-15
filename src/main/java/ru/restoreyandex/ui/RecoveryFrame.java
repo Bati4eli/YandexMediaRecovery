@@ -6,6 +6,7 @@ import ru.restoreyandex.config.ApplicationPaths;
 import ru.restoreyandex.domain.RecoveryEvent;
 import ru.restoreyandex.domain.RecoveryOptions;
 import ru.restoreyandex.domain.RecoveryReport;
+import ru.restoreyandex.logging.ApplicationLogger;
 import ru.restoreyandex.recovery.CsvRecoveryLogger;
 import ru.restoreyandex.recovery.RecoveryListener;
 import ru.restoreyandex.recovery.RecoveryService;
@@ -46,6 +47,7 @@ public final class RecoveryFrame extends JFrame {
     private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью PREW_");
     private final JComboBox<Integer> parallelismComboBox = new JComboBox<>(
             IntStream.rangeClosed(1, 10).boxed().toArray(Integer[]::new));
+    private final JButton yandexLoginButton = new JButton("Войти в Яндекс Диск…");
     private final JButton startButton = new JButton("Начать восстановление");
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
@@ -68,7 +70,7 @@ public final class RecoveryFrame extends JFrame {
         sourceField.setEditable(false);
         destinationField.setEditable(false);
         logArea.setEditable(false);
-        logArea.setFont(logArea.getFont().deriveFont(Font.PLAIN, 18f));
+        logArea.setFont(logArea.getFont().deriveFont(Font.PLAIN, 16f));
         logArea.setLineWrap(true);
         logArea.setWrapStyleWord(true);
         progressBar.setStringPainted(true);
@@ -76,9 +78,10 @@ public final class RecoveryFrame extends JFrame {
 
         JPanel folders = new JPanel(new GridBagLayout());
         folders.setBorder(BorderFactory.createEmptyBorder(12, 12, 4, 12));
-        addFolderRow(folders, 0, "Откуда (исходная):", sourceField, event -> chooseFolder(sourceField, "Выберите исходную папку"));
-        addFolderRow(folders, 1, "Куда (восстановить):", destinationField,
-                event -> chooseFolder(destinationField, "Выберите папку восстановления"));
+        addFolderRow(folders, 0, "Корень Яндекс Диска:", sourceField,
+                event -> chooseFolder(sourceField, "Выберите корень локального Яндекс Диска"));
+        addFolderRow(folders, 1, "Корень резервной копии:", destinationField,
+                event -> chooseFolder(destinationField, "Выберите корень резервной копии"));
         JPanel options = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         options.add(overwritePreviewsCheckBox);
         options.add(new JLabel("   Потоков: "));
@@ -94,7 +97,9 @@ public final class RecoveryFrame extends JFrame {
         folders.add(options, optionConstraints);
 
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        controls.add(yandexLoginButton);
         controls.add(startButton);
+        yandexLoginButton.addActionListener(event -> openYandexLogin());
         startButton.addActionListener(this::startRecovery);
 
         JPanel top = new JPanel(new BorderLayout());
@@ -146,17 +151,50 @@ public final class RecoveryFrame extends JFrame {
         RecoveryOptions options = new RecoveryOptions(overwritePreviewsCheckBox.isSelected(), selectedParallelism());
         saveCurrentSettings();
         startButton.setEnabled(false);
-        logArea.setText("Подготовка списка файлов…\n");
+        yandexLoginButton.setEnabled(false);
+        replaceLog("Подготовка списка файлов…\n");
         progressBar.setIndeterminate(true);
         new RecoveryWorker(source, destination, options).execute();
     }
 
-    private void updateProgress(RecoveryEvent event) {
+    /** Открывает отдельное окно Chrome; данные входа пользователь вводит только в браузере. */
+    private void openYandexLogin() {
+        yandexLoginButton.setEnabled(false);
+        appendLog("Открываю Chrome для входа в Яндекс Диск…\n");
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                recoveryService.openYandexDiskLogin();
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                yandexLoginButton.setEnabled(true);
+                try {
+                    get();
+                    appendLog("Вход в Яндекс Диск подтверждён. Chrome закрыт; браузерные превью готовы.\n");
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    ApplicationLogger.error("Ожидание открытия Chrome прервано", exception);
+                } catch (ExecutionException exception) {
+                    String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
+                    ApplicationLogger.error("Не удалось открыть Chrome", exception.getCause() == null ? exception : exception.getCause());
+                    appendLog("Не удалось открыть Chrome: " + message + "\n");
+                    JOptionPane.showMessageDialog(RecoveryFrame.this, "Не удалось открыть Chrome: " + message,
+                            "Яндекс Диск", JOptionPane.WARNING_MESSAGE);
+                }
+                logArea.setCaretPosition(logArea.getDocument().getLength());
+            }
+        }.execute();
+    }
+
+    private void updateProgress(RecoveryEvent event, Path sourceRoot) {
         progressBar.setIndeterminate(false);
         progressBar.setMaximum(Math.max(event.total(), 1));
         progressBar.setValue(event.processed());
         progressBar.setString(event.processed() + " / " + event.total());
-        logArea.append(event.outcome().screenStatus() + " — " + event.message() + " — " + event.source() + "\n");
+        appendLog(RecoveryLogLineFormatter.format(event, sourceRoot) + "\n");
         logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
@@ -165,6 +203,7 @@ public final class RecoveryFrame extends JFrame {
             settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
                     overwritePreviewsCheckBox.isSelected(), selectedParallelism()));
         } catch (Exception exception) {
+            ApplicationLogger.error("Не удалось сохранить настройки", exception);
             JOptionPane.showMessageDialog(this, "Не удалось сохранить настройки: " + exception.getMessage(),
                     "Настройки", JOptionPane.WARNING_MESSAGE);
         }
@@ -196,7 +235,7 @@ public final class RecoveryFrame extends JFrame {
                             progressBar.setMaximum(Math.max(totalFiles, 1));
                             progressBar.setValue(0);
                             progressBar.setString("0 / " + totalFiles);
-                            logArea.append("CSV-лог: " + csvLogger.file() + "\n");
+                            appendLog("CSV-лог: " + csvLogger.file() + "\n");
                         });
                     }
 
@@ -213,7 +252,7 @@ public final class RecoveryFrame extends JFrame {
                     @Override
                     public void onFileProcessed(RecoveryEvent event) {
                         csvLogger.onFileProcessed(event);
-                        SwingUtilities.invokeLater(() -> updateProgress(event));
+                        SwingUtilities.invokeLater(() -> updateProgress(event, source));
                     }
                 });
             }
@@ -222,19 +261,36 @@ public final class RecoveryFrame extends JFrame {
         @Override
         protected void done() {
             startButton.setEnabled(true);
+            yandexLoginButton.setEnabled(true);
             try {
                 RecoveryReport report = get();
-                logArea.append("\n" + report.toDisplayString() + "\n");
+                appendLog("\n" + report.toDisplayString() + "\n");
                 JOptionPane.showMessageDialog(RecoveryFrame.this, report.toDisplayString(), "Восстановление завершено",
                         JOptionPane.INFORMATION_MESSAGE);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
+                ApplicationLogger.error("Ожидание восстановления прервано", exception);
             } catch (ExecutionException exception) {
                 String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
-                logArea.append("\nОстановка: " + message + "\n");
+                ApplicationLogger.error("Восстановление остановлено", exception.getCause() == null ? exception : exception.getCause());
+                appendLog("\nОстановка: " + message + "\n");
                 JOptionPane.showMessageDialog(RecoveryFrame.this, "Операция не началась: " + message,
                         "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
         }
+    }
+
+    /** Выводит сообщение и в видимый журнал, и в stdout запущенного приложения. */
+    private void appendLog(String message) {
+        logArea.append(message);
+        ApplicationLogger.info(message.stripTrailing());
+        logArea.setCaretPosition(logArea.getDocument().getLength());
+    }
+
+    /** Заменяет видимый журнал и дублирует начальное сообщение в stdout. */
+    private void replaceLog(String message) {
+        logArea.setText(message);
+        ApplicationLogger.info(message.stripTrailing());
+        logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 }

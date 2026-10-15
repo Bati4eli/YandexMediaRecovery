@@ -10,6 +10,10 @@ import ru.restoreyandex.media.DefaultMediaInspector;
 import ru.restoreyandex.media.MediaInspector;
 import ru.restoreyandex.preview.PreviewExtractor;
 import ru.restoreyandex.preview.WindowsShellPreviewExtractor;
+import ru.restoreyandex.preview.CloudFirstPreviewExtractor;
+import ru.restoreyandex.preview.CloudPreviewExtractor;
+import ru.restoreyandex.preview.YandexDiskBrowserPreviewExtractor;
+import ru.restoreyandex.logging.ApplicationLogger;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -33,20 +37,32 @@ public final class RecoveryService {
     private final RecoveryPlanner planner;
     private final MediaInspector inspector;
     private final PreviewExtractor previewExtractor;
+    private final CloudPreviewExtractor cloudPreviewExtractor;
     private final SafeFileWriter fileWriter;
 
     /** Создаёт сервис восстановления для Windows. */
     public RecoveryService() {
         this(new RecoveryPlanner(), new DefaultMediaInspector(),
-                new WindowsShellPreviewExtractor(), new SafeFileWriter());
+                new WindowsShellPreviewExtractor(), new YandexDiskBrowserPreviewExtractor(), new SafeFileWriter());
     }
 
     RecoveryService(RecoveryPlanner planner, MediaInspector inspector, PreviewExtractor previewExtractor,
                     SafeFileWriter fileWriter) {
+        this(planner, inspector, previewExtractor, ignored -> Optional.empty(), fileWriter);
+    }
+
+    RecoveryService(RecoveryPlanner planner, MediaInspector inspector, PreviewExtractor previewExtractor,
+                    CloudPreviewExtractor cloudPreviewExtractor, SafeFileWriter fileWriter) {
         this.planner = Objects.requireNonNull(planner);
         this.inspector = Objects.requireNonNull(inspector);
         this.previewExtractor = Objects.requireNonNull(previewExtractor);
+        this.cloudPreviewExtractor = Objects.requireNonNull(cloudPreviewExtractor);
         this.fileWriter = Objects.requireNonNull(fileWriter);
+    }
+
+    /** Открывает Chrome с сохранённым профилем для ручного входа в Яндекс Диск. */
+    public void openYandexDiskLogin() throws IOException {
+        cloudPreviewExtractor.openLogin();
     }
 
     /**
@@ -77,6 +93,8 @@ public final class RecoveryService {
         Counter counter = new Counter();
         MediaInspector runInspector = new ru.restoreyandex.media.TimedMediaInspector(inspector,
                 Duration.ofSeconds(8), options.parallelism());
+        PreviewExtractor runPreviewExtractor = new CloudFirstPreviewExtractor(sourceRoot, cloudPreviewExtractor,
+                previewExtractor);
         ExecutorService executor = Executors.newFixedThreadPool(options.parallelism());
         try {
             ExecutorCompletionService<IndexedEvent> completion = new ExecutorCompletionService<>(executor);
@@ -86,7 +104,7 @@ public final class RecoveryService {
                 completion.submit(() -> {
                     listener.onFileStarted(source, ordinal, files.size());
                     return new IndexedEvent(source, recoverOne(source, sourceRoot, destinationRoot,
-                            runInspector, options.overwritePreviews(), counter));
+                            runInspector, runPreviewExtractor, options.overwritePreviews(), counter));
                 });
             }
             for (int completed = 1; completed <= files.size(); completed++) {
@@ -98,8 +116,11 @@ public final class RecoveryService {
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            ApplicationLogger.error("Восстановление прервано", exception);
             throw new IOException("Восстановление прервано", exception);
         } catch (ExecutionException exception) {
+            ApplicationLogger.error("Задача восстановления завершилась ошибкой",
+                    exception.getCause() == null ? exception : exception.getCause());
             throw new IOException("Сбой задачи восстановления", exception.getCause());
         } finally {
             executor.shutdownNow();
@@ -108,17 +129,18 @@ public final class RecoveryService {
     }
 
     private RecoveryEvent recoverOne(Path source, Path sourceRoot, Path destinationRoot, MediaInspector runInspector,
-                                     boolean overwritePreviews, Counter counter) {
+                                     PreviewExtractor runPreviewExtractor, boolean overwritePreviews, Counter counter) {
         counter.scanned.incrementAndGet();
         try {
             RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, runInspector, overwritePreviews);
             return switch (plan.action()) {
                 case COPY_ORIGINAL -> copy(plan, counter);
-                case WRITE_PREVIEW -> writePreview(plan, overwritePreviews, counter);
+                case WRITE_PREVIEW -> writePreview(plan, runPreviewExtractor, overwritePreviews, counter);
                 case SKIP_DESTINATION_EXISTS, SKIP_UNSUPPORTED -> skipped(plan, counter);
             };
         } catch (Exception exception) {
             counter.failed.incrementAndGet();
+            ApplicationLogger.error("Ошибка восстановления файла: " + source, exception);
             return event(source, RecoveryOutcome.NO_FILE, "Ошибка: " + conciseMessage(exception));
         }
     }
@@ -130,16 +152,18 @@ public final class RecoveryService {
             return event(plan.source(), RecoveryOutcome.COPIED, "Скопирован: " + plan.destination());
         } catch (FileAlreadyExistsException exception) {
             counter.skipped.incrementAndGet();
+            ApplicationLogger.info("Оригинал уже существует и пропущен: " + plan.destination());
             return event(plan.source(), RecoveryOutcome.ALREADY_OK, "Уже существует: " + plan.destination());
         }
     }
 
-    private RecoveryEvent writePreview(RecoveryPlan plan, boolean overwritePreviews, Counter counter) throws IOException {
-        Optional<BufferedImage> preview = previewExtractor.extract(plan.source());
+    private RecoveryEvent writePreview(RecoveryPlan plan, PreviewExtractor runPreviewExtractor,
+                                       boolean overwritePreviews, Counter counter) throws IOException {
+        Optional<BufferedImage> preview = runPreviewExtractor.extract(plan.source());
         if (preview.isEmpty()) {
             counter.previewsUnavailable.incrementAndGet();
             return event(plan.source(), RecoveryOutcome.NO_FILE,
-                    "Превью недоступно в кэше Windows");
+                    "Превью недоступно в Яндекс Диске и кэше Windows");
         }
         try {
             fileWriter.writePreview(preview.get(), plan.destination(), overwritePreviews);
@@ -148,6 +172,7 @@ public final class RecoveryService {
                     "Превью сохранено: " + plan.destination());
         } catch (FileAlreadyExistsException exception) {
             counter.skipped.incrementAndGet();
+            ApplicationLogger.info("Превью уже существует и пропущено: " + plan.destination());
             return event(plan.source(), RecoveryOutcome.ALREADY_OK, "Уже существует: " + plan.destination());
         }
     }

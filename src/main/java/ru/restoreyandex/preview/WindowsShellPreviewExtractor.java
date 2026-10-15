@@ -21,6 +21,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import ru.restoreyandex.logging.ApplicationLogger;
 
 /**
  * Извлекает настоящую миниатюру файла с помощью Windows Shell.
@@ -105,6 +106,7 @@ public final class WindowsShellPreviewExtractor implements PreviewExtractor {
                 GDI32.INSTANCE.DeleteObject(bitmap.get());
             }
         } catch (RuntimeException exception) {
+            ApplicationLogger.error("Windows Shell не вернул превью: " + file, exception);
             return Optional.empty();
         } finally {
             if (shellItem != null) {

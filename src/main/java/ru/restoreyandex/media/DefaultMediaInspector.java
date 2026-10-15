@@ -2,6 +2,7 @@ package ru.restoreyandex.media;
 
 import ru.restoreyandex.domain.MediaInspection;
 import ru.restoreyandex.domain.MediaType;
+import ru.restoreyandex.logging.ApplicationLogger;
 
 import org.jcodec.api.FrameGrab;
 import org.jcodec.common.io.NIOUtils;
@@ -41,6 +42,7 @@ public final class DefaultMediaInspector implements MediaInspector {
             Object offline = Files.getAttribute(file, "dos:offline");
             return Boolean.TRUE.equals(offline);
         } catch (IOException | UnsupportedOperationException | IllegalArgumentException exception) {
+            ApplicationLogger.error("Не удалось прочитать Windows-флаг облачной заглушки: " + file, exception);
             return false;
         }
     }
@@ -63,6 +65,7 @@ public final class DefaultMediaInspector implements MediaInspector {
                 reader.dispose();
             }
         } catch (IOException | RuntimeException exception) {
+            ApplicationLogger.error("Не удалось декодировать изображение: " + file, exception);
             return false;
         }
     }
@@ -71,6 +74,7 @@ public final class DefaultMediaInspector implements MediaInspector {
         try (SeekableByteChannel channel = NIOUtils.readableChannel(file.toFile())) {
             return FrameGrab.createFrameGrab(channel).getNativeFrame() != null;
         } catch (Exception exception) {
+            ApplicationLogger.error("Не удалось декодировать видео: " + file, exception);
             return false;
         }
     }

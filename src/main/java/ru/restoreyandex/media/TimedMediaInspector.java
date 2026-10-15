@@ -2,6 +2,7 @@ package ru.restoreyandex.media;
 
 import ru.restoreyandex.domain.MediaInspection;
 import ru.restoreyandex.domain.MediaType;
+import ru.restoreyandex.logging.ApplicationLogger;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -69,18 +70,23 @@ public final class TimedMediaInspector implements MediaInspector {
         try {
             task = executor.submit(() -> delegate.inspect(file));
         } catch (RejectedExecutionException exception) {
+            ApplicationLogger.error("Пул проверки медиа исчерпан: " + file, exception);
             return MediaInspection.unreadable(mediaType);
         }
         try {
             return task.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException exception) {
             task.cancel(true);
+            ApplicationLogger.error("Истекло время проверки медиа: " + file, exception);
             return MediaInspection.unreadable(mediaType);
         } catch (InterruptedException exception) {
             task.cancel(true);
             Thread.currentThread().interrupt();
+            ApplicationLogger.error("Проверка медиа прервана: " + file, exception);
             return MediaInspection.unreadable(mediaType);
         } catch (ExecutionException exception) {
+            ApplicationLogger.error("Проверка медиа завершилась ошибкой: " + file,
+                    exception.getCause() == null ? exception : exception.getCause());
             return MediaInspection.unreadable(mediaType);
         }
     }

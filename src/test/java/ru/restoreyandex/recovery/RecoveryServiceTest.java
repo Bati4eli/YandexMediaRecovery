@@ -3,6 +3,7 @@ package ru.restoreyandex.recovery;
 import ru.restoreyandex.media.DefaultMediaInspector;
 import ru.restoreyandex.domain.RecoveryOptions;
 import ru.restoreyandex.domain.RecoveryReport;
+import ru.restoreyandex.preview.CloudPreviewExtractor;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -63,6 +64,25 @@ class RecoveryServiceTest {
     }
 
     @Test
+    void prefersBrowserPreviewBeforeWindowsShellCache() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source/2011"));
+        Path destination = temporaryDirectory.resolve("destination");
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        BufferedImage browserPreview = image(Color.BLUE);
+        BufferedImage shellPreview = image(Color.GREEN);
+        CloudPreviewExtractor cloud = relativePath -> {
+            assertEquals(Path.of("2011/lost.jpg"), relativePath);
+            return Optional.of(browserPreview);
+        };
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.of(shellPreview), cloud, new SafeFileWriter());
+
+        service.recover(source.getParent(), destination, new RecoveryListener() { });
+
+        assertEquals(Color.BLUE.getRGB(), ImageIO.read(destination.resolve("2011/PREW_lost.png").toFile()).getRGB(0, 0));
+    }
+
+    @Test
     void replacesOnlyExistingPreviewWhenTheOptionIsEnabled() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
@@ -85,8 +105,13 @@ class RecoveryServiceTest {
     }
 
     private void writeImage(Path path, Color color) throws Exception {
+        BufferedImage image = image(color);
+        ImageIO.write(image, "png", path.toFile());
+    }
+
+    private BufferedImage image(Color color) {
         BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
         image.setRGB(0, 0, color.getRGB());
-        ImageIO.write(image, "png", path.toFile());
+        return image;
     }
 }

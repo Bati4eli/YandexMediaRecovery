@@ -1,6 +1,7 @@
 package ru.restoreyandex.app;
 
 import ru.restoreyandex.ui.RecoveryFrame;
+import ru.restoreyandex.logging.ApplicationLogger;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
@@ -15,7 +16,8 @@ public final class RecoveryApplication {
         SwingUtilities.invokeLater(() -> {
             try {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            } catch (Exception ignored) {
+            } catch (Exception exception) {
+                ApplicationLogger.error("Не удалось включить системное оформление Swing", exception);
                 // Стандартное кроссплатформенное оформление Swing остаётся рабочим.
             }
             new RecoveryFrame().setVisible(true);

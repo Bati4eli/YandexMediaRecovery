@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
+import ru.restoreyandex.logging.ApplicationLogger;
 
 /** Сохраняет выбранные пользователем папки в Java properties рядом с программой. */
 public final class PropertiesSettingsRepository {
@@ -47,6 +48,7 @@ public final class PropertiesSettingsRepository {
                     Boolean.parseBoolean(properties.getProperty(OVERWRITE_PREVIEWS_KEY, "false")),
                     parallelismOrDefault(properties.getProperty(PARALLELISM_KEY)));
         } catch (IOException | IllegalArgumentException exception) {
+            ApplicationLogger.error("Не удалось загрузить настройки восстановления", exception);
             return defaults();
         }
     }
@@ -88,6 +90,7 @@ public final class PropertiesSettingsRepository {
             int parallelism = value == null ? RecoverySettings.DEFAULT_PARALLELISM : Integer.parseInt(value);
             return parallelism >= 1 && parallelism <= 10 ? parallelism : RecoverySettings.DEFAULT_PARALLELISM;
         } catch (NumberFormatException exception) {
+            ApplicationLogger.error("Некорректное число потоков в настройках", exception);
             return RecoverySettings.DEFAULT_PARALLELISM;
         }
     }

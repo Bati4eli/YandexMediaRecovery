@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
+import ru.restoreyandex.logging.ApplicationLogger;
 
 /** Записывает надёжную CSV-строку для каждого файла, обработанного за запуск. */
 public final class CsvRecoveryLogger implements RecoveryListener, AutoCloseable {
@@ -48,7 +49,8 @@ public final class CsvRecoveryLogger implements RecoveryListener, AutoCloseable 
             writer.write(csv(csvStatus(event.outcome())));
             writer.newLine();
             writer.flush();
-        } catch (IOException ignored) {
+        } catch (IOException exception) {
+            ApplicationLogger.error("Не удалось записать строку CSV-журнала: " + file, exception);
             // Сбой журнала не должен прерывать восстановление семейных фотографий.
         }
     }
