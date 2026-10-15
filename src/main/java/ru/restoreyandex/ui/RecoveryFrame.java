@@ -27,6 +27,7 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -34,7 +35,10 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Font;
+import java.awt.Image;
 import java.awt.event.ActionEvent;
+import java.io.IOException;
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.IntStream;
@@ -64,7 +68,27 @@ public final class RecoveryFrame extends JFrame {
         overwritePreviewsCheckBox.setSelected(settings.overwritePreviews());
         deleteLowerQualityPreviewsCheckBox.setSelected(settings.deleteLowerQualityPreviews());
         parallelismComboBox.setSelectedItem(settings.parallelism());
+        setApplicationIcon();
         initialize();
+    }
+
+    /** Устанавливает в заголовке Windows логотип, включённый в ресурсы приложения. */
+    private void setApplicationIcon() {
+        URL logoResource = RecoveryFrame.class.getResource("/logo.png");
+        if (logoResource == null) {
+            ApplicationLogger.error("Не найден ресурс логотипа приложения", null);
+            return;
+        }
+        try {
+            Image image = ImageIO.read(logoResource);
+            if (image == null) {
+                ApplicationLogger.error("Не удалось декодировать логотип приложения", null);
+                return;
+            }
+            setIconImage(image);
+        } catch (IOException exception) {
+            ApplicationLogger.error("Не удалось загрузить логотип приложения", exception);
+        }
     }
 
     private void initialize() {

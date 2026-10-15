@@ -40,3 +40,8 @@ tasks.named('jar') {
         attributes 'Main-Class': application.mainClass
     }
 }
+
+// Логотип поставляется вместе с приложением и доступен через classpath в окне Swing.
+tasks.named('processResources') {
+    from(layout.projectDirectory.file('logo.png'))
+}
