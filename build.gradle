@@ -21,6 +21,7 @@ application {
 }
 
 dependencies {
+    implementation 'com.formdev:flatlaf:3.6'
     implementation 'net.java.dev.jna:jna:5.16.0'
     implementation 'net.java.dev.jna:jna-platform:5.16.0'
     implementation 'org.jcodec:jcodec-javase:0.2.5'
@@ -55,6 +56,7 @@ def downloadableLibraryNames = [
         'driver-1.58.0.jar',
         'driver-bundle-1.58.0.jar',
         'error_prone_annotations-2.41.0.jar',
+        'flatlaf-3.6.jar',
         'gson-2.13.2.jar',
         'jcodec-0.2.5.jar',
         'jcodec-javase-0.2.5.jar',

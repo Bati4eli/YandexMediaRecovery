@@ -28,6 +28,12 @@ public final class YandexDiskBrowserPreviewExtractor implements CloudPreviewExtr
         return session.openLogin();
     }
 
+    /** Выполняет фоновый выход из Яндекс Диска через профиль приложения. */
+    @Override
+    public void logout() throws IOException {
+        session.logout();
+    }
+
     /** Настраивает видимость браузера для следующего запроса превью. */
     @Override
     public void configureBrowserDebugMode(boolean enabled) {

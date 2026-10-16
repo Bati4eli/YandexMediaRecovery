@@ -90,6 +90,11 @@ public final class RecoveryService {
         return cloudPreviewExtractor.openLogin();
     }
 
+    /** Выходит из аккаунта Яндекс Диска в изолированном браузерном профиле приложения. */
+    public void logoutYandexDisk() throws IOException {
+        cloudPreviewExtractor.logout();
+    }
+
     /**
      * Немедленно останавливает текущий запуск: отменяет рабочие задачи,
      * прерывает ограниченную проверку оригиналов и закрывает Chrome.

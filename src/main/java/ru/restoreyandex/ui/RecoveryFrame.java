@@ -28,9 +28,11 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.Timer;
 import javax.imageio.ImageIO;
 import java.awt.BorderLayout;
 import java.awt.Cursor;
+import java.awt.Component;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -53,6 +55,7 @@ import java.util.stream.IntStream;
 /** Главное окно для длительной операции восстановления. */
 public final class RecoveryFrame extends JFrame {
     private static final URI PROJECT_REPOSITORY = URI.create("https://github.com/Bati4eli/YandexMediaRecovery");
+    private static final String[] SPINNER_FRAMES = {"◐", "◓", "◑", "◒"};
     private final JTextField sourceField = new JTextField();
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
@@ -63,7 +66,10 @@ public final class RecoveryFrame extends JFrame {
     private final JCheckBox browserDebugModeCheckBox = new JCheckBox("🐞 Отладка браузера (1 поток)");
     private final JComboBox<Integer> parallelismComboBox = new JComboBox<>(
             IntStream.rangeClosed(1, 10).boxed().toArray(Integer[]::new));
-    private final JButton yandexLoginButton = new JButton("Войти в Яндекс Диск…");
+    private final JButton yandexLoginButton = new JButton("🔐 Войти в Яндекс Диск…");
+    private final JButton yandexLogoutButton = new JButton("🚪 Выход из аккаунта");
+    private final JButton sourceBrowseButton = new JButton("Выбрать…");
+    private final JButton destinationBrowseButton = new JButton("Выбрать…");
     private final JLabel yandexAccountLabel = new JLabel("Аккаунт Яндекс Диска: не авторизован");
     private final JButton startButton = new JButton("▶️ Начать восстановление");
     private final JButton stopButton = new JButton("⏹ Остановить восстановление");
@@ -71,7 +77,13 @@ public final class RecoveryFrame extends JFrame {
     private final RecoveryService recoveryService = new RecoveryService();
     private List<Path> savedSelectedFolders = List.of();
     private String yandexAccountEmail;
+    private boolean yandexAuthenticationConfirmed;
     private RecoveryWorker activeRecoveryWorker;
+    private int logoutSpinnerFrame;
+    private final Timer logoutSpinnerTimer = new Timer(120, event -> {
+        yandexLogoutButton.setText(SPINNER_FRAMES[logoutSpinnerFrame++ % SPINNER_FRAMES.length]
+                + " 🚪 Выход из аккаунта");
+    });
 
     /** Создаёт окно и подставляет ранее сохранённые папки, если они есть. */
     public RecoveryFrame() {
@@ -85,6 +97,7 @@ public final class RecoveryFrame extends JFrame {
         browserDebugModeCheckBox.setSelected(settings.browserDebugMode());
         savedSelectedFolders = settings.selectedFolders();
         yandexAccountEmail = settings.yandexAccountEmail();
+        yandexAuthenticationConfirmed = settings.yandexAuthenticationConfirmed();
         setApplicationIcon();
         initialize();
     }
@@ -123,18 +136,22 @@ public final class RecoveryFrame extends JFrame {
 
         JPanel folders = new JPanel(new GridBagLayout());
         folders.setBorder(BorderFactory.createEmptyBorder(12, 12, 4, 12));
-        addFolderRow(folders, 0, "Корень Яндекс Диска:", sourceField,
+        addFolderRow(folders, 0, "Корень Яндекс Диска:", sourceField, sourceBrowseButton,
                 event -> chooseFolder(sourceField, "Выберите корень локального Яндекс Диска"));
-        addFolderRow(folders, 1, "Корень резервной копии:", destinationField,
+        addFolderRow(folders, 1, "Корень резервной копии:", destinationField, destinationBrowseButton,
                 event -> chooseFolder(destinationField, "Выберите корень резервной копии"));
         JPanel options = new JPanel();
         options.setLayout(new javax.swing.BoxLayout(options, javax.swing.BoxLayout.Y_AXIS));
+        overwritePreviewsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        deleteLowerQualityPreviewsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        browserDebugModeCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
         options.add(overwritePreviewsCheckBox);
         options.add(deleteLowerQualityPreviewsCheckBox);
         options.add(browserDebugModeCheckBox);
         JPanel parallelismOptions = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         parallelismOptions.add(new JLabel("Потоков: "));
         parallelismOptions.add(parallelismComboBox);
+        parallelismOptions.setAlignmentX(Component.LEFT_ALIGNMENT);
         options.add(parallelismOptions);
         overwritePreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
         deleteLowerQualityPreviewsCheckBox.addActionListener(event -> saveCurrentSettings());
@@ -147,17 +164,21 @@ public final class RecoveryFrame extends JFrame {
         applyBrowserDebugMode();
 
         GridBagConstraints optionConstraints = new GridBagConstraints();
-        optionConstraints.gridx = 1;
+        optionConstraints.gridx = 0;
         optionConstraints.gridy = 2;
+        optionConstraints.gridwidth = 3;
         optionConstraints.anchor = GridBagConstraints.WEST;
-        optionConstraints.insets = new Insets(4, 0, 4, 6);
+        optionConstraints.insets = new Insets(8, 0, 4, 6);
         folders.add(options, optionConstraints);
 
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
         controls.add(yandexLoginButton);
+        controls.add(yandexLogoutButton);
         controls.add(yandexAccountLabel);
         showSavedYandexAccount();
+        refreshYandexAccountControls();
         yandexLoginButton.addActionListener(event -> openYandexLogin());
+        yandexLogoutButton.addActionListener(event -> logoutYandexAccount());
         startButton.addActionListener(this::startRecovery);
 
         JPanel top = new JPanel(new BorderLayout());
@@ -195,7 +216,7 @@ public final class RecoveryFrame extends JFrame {
         pack();
     }
 
-    private void addFolderRow(JPanel panel, int row, String label, JTextField field,
+    private void addFolderRow(JPanel panel, int row, String label, JTextField field, JButton browseButton,
                               java.awt.event.ActionListener browseAction) {
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.gridy = row;
@@ -209,7 +230,6 @@ public final class RecoveryFrame extends JFrame {
         constraints.gridx = 2;
         constraints.weightx = 0;
         constraints.fill = GridBagConstraints.NONE;
-        JButton browseButton = new JButton("Выбрать…");
         browseButton.addActionListener(browseAction);
         panel.add(browseButton, constraints);
     }
@@ -238,6 +258,9 @@ public final class RecoveryFrame extends JFrame {
         saveCurrentSettings();
         startButton.setEnabled(false);
         yandexLoginButton.setEnabled(false);
+        yandexLogoutButton.setEnabled(false);
+        sourceBrowseButton.setEnabled(false);
+        destinationBrowseButton.setEnabled(false);
         folderSelectionTree.setSelectionEditingEnabled(false);
         stopButton.setEnabled(true);
         replaceLog("Подготовка списка файлов…\n");
@@ -282,6 +305,7 @@ public final class RecoveryFrame extends JFrame {
     /** Открывает отдельное окно Chrome; данные входа пользователь вводит только в браузере. */
     private void openYandexLogin() {
         yandexLoginButton.setEnabled(false);
+        yandexLogoutButton.setEnabled(false);
         appendLog("Открываю Chrome для входа в Яндекс Диск…\n");
         new SwingWorker<YandexAccountInfo, Void>() {
             @Override
@@ -294,11 +318,13 @@ public final class RecoveryFrame extends JFrame {
                 yandexLoginButton.setEnabled(true);
                 try {
                     YandexAccountInfo account = get();
+                    yandexAuthenticationConfirmed = true;
                     if (account.hasEmail()) {
                         yandexAccountEmail = account.email();
-                        saveCurrentSettings();
                     }
+                    saveCurrentSettings();
                     showAuthenticatedYandexAccount(account);
+                    refreshYandexAccountControls();
                     appendLog("✅ Вход в Яндекс Диск подтверждён"
                             + (account.hasEmail() ? ": " + account.email() : ".")
                             + " Chrome закрыт; браузерные превью готовы.\n");
@@ -311,7 +337,55 @@ public final class RecoveryFrame extends JFrame {
                     appendLog("Не удалось открыть Chrome: " + message + "\n");
                     JOptionPane.showMessageDialog(RecoveryFrame.this, "Не удалось открыть Chrome: " + message,
                             "Яндекс Диск", JOptionPane.WARNING_MESSAGE);
+                } finally {
+                    refreshYandexAccountControls();
                 }
+                logArea.setCaretPosition(logArea.getDocument().getLength());
+            }
+        }.execute();
+    }
+
+    /** Выходит из профиля приложения в фоновом Chrome и сбрасывает сохранённый статус только после успеха. */
+    private void logoutYandexAccount() {
+        yandexLoginButton.setEnabled(false);
+        yandexLogoutButton.setEnabled(false);
+        startButton.setEnabled(false);
+        logoutSpinnerFrame = 0;
+        yandexLogoutButton.setText(SPINNER_FRAMES[logoutSpinnerFrame++] + " 🚪 Выход из аккаунта");
+        logoutSpinnerTimer.start();
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                recoveryService.logoutYandexDisk();
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                logoutSpinnerTimer.stop();
+                yandexLogoutButton.setText("🚪 Выход из аккаунта");
+                yandexLoginButton.setEnabled(true);
+                startButton.setEnabled(true);
+                try {
+                    get();
+                    yandexAuthenticationConfirmed = false;
+                    yandexAccountEmail = "";
+                    saveCurrentSettings();
+                    yandexAccountLabel.setText("Аккаунт Яндекс Диска: не авторизован");
+                    refreshYandexAccountControls();
+                    appendLog("✅ Выполнен выход из аккаунта Яндекс Диска.\n");
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    ApplicationLogger.error("Ожидание выхода из аккаунта прервано", exception);
+                } catch (ExecutionException exception) {
+                    String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
+                    ApplicationLogger.error("Не удалось выйти из аккаунта Яндекс Диска",
+                            exception.getCause() == null ? exception : exception.getCause());
+                    appendLog("Не удалось выйти из аккаунта: " + message + "\n");
+                    JOptionPane.showMessageDialog(RecoveryFrame.this, "Не удалось выйти из аккаунта: " + message,
+                            "Яндекс Диск", JOptionPane.WARNING_MESSAGE);
+                }
+                refreshYandexAccountControls();
                 logArea.setCaretPosition(logArea.getDocument().getLength());
             }
         }.execute();
@@ -334,7 +408,7 @@ public final class RecoveryFrame extends JFrame {
             settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
                     overwritePreviewsCheckBox.isSelected(), deleteLowerQualityPreviewsCheckBox.isSelected(),
                     selectedParallelism(), browserDebugModeCheckBox.isSelected(), folderSelectionTree.selectedFolders(),
-                    yandexAccountEmail));
+                    yandexAccountEmail, yandexAuthenticationConfirmed));
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось сохранить настройки", exception);
             JOptionPane.showMessageDialog(this, "Не удалось сохранить настройки: " + exception.getMessage(),
@@ -348,8 +422,10 @@ public final class RecoveryFrame extends JFrame {
 
     /** Показывает email, сохранённый после ранее успешно подтверждённого входа. */
     private void showSavedYandexAccount() {
-        if (!yandexAccountEmail.isBlank()) {
-            yandexAccountLabel.setText("Аккаунт Яндекс Диска: " + yandexAccountEmail + " (сохранён)");
+        if (yandexAuthenticationConfirmed) {
+            yandexAccountLabel.setText(yandexAccountEmail.isBlank()
+                    ? "✅ Авторизация в Яндекс Диске подтверждена (сохранено)"
+                    : "✅ Авторизация: " + yandexAccountEmail + " (сохранено)");
         }
     }
 
@@ -362,6 +438,14 @@ public final class RecoveryFrame extends JFrame {
         } else {
             yandexAccountLabel.setText("✅ Авторизация в Яндекс Диске подтверждена");
         }
+    }
+
+    /** Показывает только действие, соответствующее сохранённому состоянию авторизации. */
+    private void refreshYandexAccountControls() {
+        yandexLoginButton.setVisible(!yandexAuthenticationConfirmed);
+        yandexLoginButton.setEnabled(!yandexAuthenticationConfirmed);
+        yandexLogoutButton.setVisible(yandexAuthenticationConfirmed);
+        yandexLogoutButton.setEnabled(yandexAuthenticationConfirmed);
     }
 
     private void reloadFolderTree(Path sourceRoot) {
@@ -415,6 +499,9 @@ public final class RecoveryFrame extends JFrame {
         protected void done() {
             startButton.setEnabled(true);
             yandexLoginButton.setEnabled(true);
+            yandexLogoutButton.setEnabled(yandexAuthenticationConfirmed);
+            sourceBrowseButton.setEnabled(true);
+            destinationBrowseButton.setEnabled(true);
             folderSelectionTree.setSelectionEditingEnabled(true);
             stopButton.setEnabled(false);
             activeRecoveryWorker = null;

@@ -54,7 +54,13 @@ final class FolderSelectionTree extends JPanel {
         tree.setCellRenderer((currentTree, value, selected, expanded, leaf, row, hasFocus) -> {
             if (value instanceof DirectoryNode node) {
                 JCheckBox checkBox = new JCheckBox(node.toString(), node.selected);
-                checkBox.setOpaque(false);
+                // FlatLaf назначает JCheckBox собственную поверхность. У renderer
+                // она выглядит как серый прямоугольник за каждым именем папки.
+                // Используем ровно фон дерева, чтобы строка оставалась цельной.
+                checkBox.setOpaque(true);
+                checkBox.setBackground(currentTree.getBackground());
+                checkBox.setForeground(currentTree.getForeground());
+                checkBox.setBorderPaintedFlat(true);
                 checkBox.setEnabled(selectionEditingEnabled);
                 return checkBox;
             }

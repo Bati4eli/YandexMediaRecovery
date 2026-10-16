@@ -35,6 +35,7 @@ echo ── [2/3] 📦 Загрузка библиотек приложения 
 call :download "https://repo.maven.apache.org/maven2/com/microsoft/playwright/driver/1.58.0/driver-1.58.0.jar" "%APP_DIR%\driver-1.58.0.jar" || goto :failure
 call :download "https://repo.maven.apache.org/maven2/com/microsoft/playwright/driver-bundle/1.58.0/driver-bundle-1.58.0.jar" "%APP_DIR%\driver-bundle-1.58.0.jar" || goto :failure
 call :download "https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_annotations/2.41.0/error_prone_annotations-2.41.0.jar" "%APP_DIR%\error_prone_annotations-2.41.0.jar" || goto :failure
+call :download "https://repo.maven.apache.org/maven2/com/formdev/flatlaf/3.6/flatlaf-3.6.jar" "%APP_DIR%\flatlaf-3.6.jar" || goto :failure
 call :download "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.13.2/gson-2.13.2.jar" "%APP_DIR%\gson-2.13.2.jar" || goto :failure
 call :download "https://repo.maven.apache.org/maven2/org/jcodec/jcodec/0.2.5/jcodec-0.2.5.jar" "%APP_DIR%\jcodec-0.2.5.jar" || goto :failure
 call :download "https://repo.maven.apache.org/maven2/org/jcodec/jcodec-javase/0.2.5/jcodec-javase-0.2.5.jar" "%APP_DIR%\jcodec-javase-0.2.5.jar" || goto :failure

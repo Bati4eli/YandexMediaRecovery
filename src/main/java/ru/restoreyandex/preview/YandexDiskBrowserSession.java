@@ -13,7 +13,11 @@ import ru.restoreyandex.logging.ApplicationLogger;
 
 import java.io.IOException;
 import java.net.URLDecoder;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
@@ -72,6 +76,40 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
         } finally {
             close();
         }
+    }
+
+    /**
+     * Выполняет выход из Яндекс Диска в фоновом Chrome и очищает только
+     * постоянный профиль этого приложения.
+     *
+     * <p>Если кнопка «Выйти» не найдена из-за изменившейся разметки Диска,
+     * профиль приложения всё равно очищается. Это гарантирует, что следующий
+     * запуск не унаследует локальные cookie, но не затрагивает профиль обычного
+     * Chrome пользователя.</p>
+     */
+    public synchronized void logout() throws IOException {
+        boolean logoutControlClicked = false;
+        try {
+            Page logoutPage = ensurePage(true);
+            logoutPage.navigate(DISK_ROOT, previewNavigationOptions());
+            if (openAccountMenu(logoutPage)) {
+                Locator logoutControl = logoutPage.getByText("Выйти", new Page.GetByTextOptions().setExact(true));
+                if (logoutControl.count() > 0) {
+                    logoutControl.first().click(new Locator.ClickOptions().setTimeout(5_000));
+                    logoutControlClicked = true;
+                    logoutPage.waitForTimeout(300);
+                }
+            }
+        } catch (PlaywrightException exception) {
+            ApplicationLogger.error("Не удалось открыть Chrome для выхода из Яндекс Диска", exception);
+            throw new IOException("Не удалось выполнить выход из Яндекс Диска", exception);
+        } finally {
+            close();
+        }
+        deletePersistentProfile();
+        ApplicationLogger.info(logoutControlClicked
+                ? "Выход из Яндекс Диска выполнен; профиль браузера приложения очищен."
+                : "Профиль браузера приложения очищен; кнопка выхода Яндекс Диска не найдена.");
     }
 
     /**
@@ -223,7 +261,30 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
      */
     private Optional<YandexAccountInfo> readAuthenticatedAccount(Page authenticatedPage) {
         try {
-            boolean accountCardOpened = Boolean.TRUE.equals(authenticatedPage.evaluate("""
+            boolean accountCardOpened = openAccountMenu(authenticatedPage);
+            if (!accountCardOpened) {
+                ApplicationLogger.info("Карточка аккаунта Яндекс Диска не найдена; имя не будет показано.");
+                return Optional.empty();
+            }
+            for (int attempt = 0; attempt < 15; attempt++) {
+                Optional<YandexAccountInfo> accountName = YandexAccountNameParser.findAccount(
+                        authenticatedPage.locator("body").innerText());
+                if (accountName.isPresent()) {
+                    return accountName;
+                }
+                authenticatedPage.waitForTimeout(200);
+            }
+            ApplicationLogger.info("Карточка аккаунта открыта, но отображаемое имя не распознано.");
+            return Optional.empty();
+        } catch (PlaywrightException exception) {
+            ApplicationLogger.error("Не удалось прочитать имя аккаунта Яндекс Диска", exception);
+            return Optional.empty();
+        }
+    }
+
+    /** Открывает карточку профиля через доступную подпись, аватар либо позицию аватара в левой панели. */
+    private boolean openAccountMenu(Page authenticatedPage) {
+        return Boolean.TRUE.equals(authenticatedPage.evaluate("""
                     () => {
                         const isVisible = element => {
                             const rect = element.getBoundingClientRect();
@@ -259,30 +320,40 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
                         return true;
                     }
                     """));
-            if (!accountCardOpened) {
-                ApplicationLogger.info("Карточка аккаунта Яндекс Диска не найдена; имя не будет показано.");
-                return Optional.empty();
-            }
-            for (int attempt = 0; attempt < 15; attempt++) {
-                Optional<YandexAccountInfo> accountName = YandexAccountNameParser.findAccount(
-                        authenticatedPage.locator("body").innerText());
-                if (accountName.isPresent()) {
-                    return accountName;
-                }
-                authenticatedPage.waitForTimeout(200);
-            }
-            ApplicationLogger.info("Карточка аккаунта открыта, но отображаемое имя не распознано.");
-            return Optional.empty();
-        } catch (PlaywrightException exception) {
-            ApplicationLogger.error("Не удалось прочитать имя аккаунта Яндекс Диска", exception);
-            return Optional.empty();
+    }
+
+    /** Удаляет исключительно профиль, расположенный рядом с исполняемым файлом приложения. */
+    private void deletePersistentProfile() throws IOException {
+        Path profile = browserProfileDirectory();
+        if (!Files.exists(profile)) {
+            return;
         }
+        Files.walkFileTree(profile, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path directory, IOException exception) throws IOException {
+                if (exception != null) {
+                    throw exception;
+                }
+                Files.delete(directory);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    private Path browserProfileDirectory() {
+        return ApplicationPaths.programDirectory().resolve("yandex-media-recovery-browser-profile");
     }
 
     private Page ensurePage(boolean headless) {
         if (context == null) {
             playwright = Playwright.create();
-            Path profile = ApplicationPaths.programDirectory().resolve("yandex-media-recovery-browser-profile");
+            Path profile = browserProfileDirectory();
             context = playwright.chromium().launchPersistentContext(profile,
                     new com.microsoft.playwright.BrowserType.LaunchPersistentContextOptions()
                             .setChannel("chrome").setHeadless(debugMode ? false : headless));

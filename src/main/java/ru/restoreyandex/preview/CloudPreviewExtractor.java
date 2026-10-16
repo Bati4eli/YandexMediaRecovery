@@ -21,6 +21,14 @@ public interface CloudPreviewExtractor {
         throw new IOException("Вход в Яндекс Диск недоступен для этого источника превью");
     }
 
+    /**
+     * Выходит из аккаунта и удаляет только постоянный браузерный профиль
+     * приложения. Не поддерживающие авторизацию реализации оставляют метод
+     * без действия.
+     */
+    default void logout() throws IOException {
+    }
+
     /** Включает или выключает видимое окно Chrome для диагностики маршрута файлов. */
     default void configureBrowserDebugMode(boolean enabled) {
     }

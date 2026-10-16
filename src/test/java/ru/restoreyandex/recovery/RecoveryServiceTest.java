@@ -448,6 +448,28 @@ class RecoveryServiceTest {
         assertTrue(browserClosed.get());
     }
 
+    @Test
+    void logoutDelegatesToCloudPreviewChannel() throws Exception {
+        AtomicBoolean loggedOut = new AtomicBoolean();
+        CloudPreviewExtractor browser = new CloudPreviewExtractor() {
+            @Override
+            public Optional<BrowserPreview> extract(Path relativePath) {
+                return Optional.empty();
+            }
+
+            @Override
+            public void logout() {
+                loggedOut.set(true);
+            }
+        };
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.empty(), browser, ignored -> Optional.empty(), new SafeFileWriter());
+
+        service.logoutYandexDisk();
+
+        assertTrue(loggedOut.get());
+    }
+
     private RecoveryService serviceWithNoPreview() {
         return new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
                 ignored -> Optional.empty(), new SafeFileWriter());
