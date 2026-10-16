@@ -50,8 +50,44 @@ tasks.named('processResources') {
 def exeOutputDirectory = layout.buildDirectory.dir('exe')
 def exeApplicationDirectory = layout.buildDirectory.dir('exe/YandexMediaRecovery')
 def packagedLibraries = layout.buildDirectory.dir("install/${project.name}/lib")
+def runtimeDependencyArtifacts = providers.provider {
+    configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts
+            .findAll { artifact -> artifact.extension == 'jar' }
+            .toList()
+            .sort { left, right -> left.file.name <=> right.file.name }
+}
+def downloadableLibraryNames = providers.provider {
+    runtimeDependencyArtifacts.get().collect { artifact -> artifact.file.name }.toSet()
+}
+def runtimeDependencyManifest = layout.buildDirectory.file('generated/downloader/runtime-dependencies.tsv')
+def releaseArtifactVersion = providers.gradleProperty('releaseVersion').getOrElse(project.version.toString())
 def packagingLauncher = javaToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(21)
+}
+
+/** Собирает URL и имена всех JAR, разрешённых Gradle для запуска приложения. */
+tasks.register('writeRuntimeDependencyManifest') {
+    group = 'distribution'
+    description = 'Формирует манифест Maven-зависимостей для компактного загрузчика.'
+    inputs.files(configurations.runtimeClasspath)
+    outputs.file(runtimeDependencyManifest)
+
+    doLast {
+        List artifacts = runtimeDependencyArtifacts.get()
+        Set fileNames = artifacts.collect { artifact -> artifact.file.name } as Set
+        if (artifacts.isEmpty() || fileNames.size() != artifacts.size()) {
+            throw new GradleException('Невозможно сформировать однозначный список JAR-зависимостей для загрузчика.')
+        }
+        String manifest = artifacts.collect { artifact ->
+            def module = artifact.moduleVersion.id
+            def groupPath = module.group.replace('.', '/')
+            def url = "https://repo.maven.apache.org/maven2/${groupPath}/${artifact.name}/${module.version}/${artifact.file.name}"
+            "${url}\t${artifact.file.name}"
+        }.join(System.lineSeparator()) + System.lineSeparator()
+        File output = runtimeDependencyManifest.get().asFile
+        output.parentFile.mkdirs()
+        output.setText(manifest, 'UTF-8')
+    }
 }
 
 /**
@@ -100,8 +136,32 @@ tasks.register('packageWindowsZip', Zip) {
     }
 }
 
+/**
+ * Упаковывает компактную поставку. После распаковки пользователь запускает
+ * download-dependencies.bat: он скачивает Java Runtime и библиотеки рядом с EXE.
+ */
+tasks.register('packageBootstrapZip', Zip) {
+    group = 'distribution'
+    description = 'Создаёт компактный ZIP с EXE и BAT для загрузки зависимостей при первом запуске.'
+    dependsOn(tasks.named('packageExe'))
+    dependsOn(':downloader:generateDownloadScript')
+    archiveFileName = "YandexMediaRecovery-${releaseArtifactVersion}.zip"
+    destinationDirectory = layout.buildDirectory.dir('release')
+    from(exeApplicationDirectory) {
+        into('YandexMediaRecovery')
+        exclude('runtime/**')
+        exclude { details ->
+            details.path.startsWith('app/') && downloadableLibraryNames.get().contains(details.file.name)
+        }
+    }
+    from(layout.projectDirectory.file('downloader/build/generated/download-dependencies.bat')) {
+        into('YandexMediaRecovery')
+    }
+}
+
 // Обычная команда сборки выпускает launcher и готовый переносимый архив.
 tasks.named('build') {
     dependsOn(tasks.named('packageExe'))
     dependsOn(tasks.named('packageWindowsZip'))
+    dependsOn(tasks.named('packageBootstrapZip'))
 }

@@ -1,0 +1,206 @@
+name: Draft Windows release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  resolve-release:
+    name: Resolve tag range
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.release.outputs.new_tag }}
+      previous_label: ${{ steps.release.outputs.previous_label }}
+      range: ${{ steps.release.outputs.range }}
+      commit_count: ${{ steps.release.outputs.commit_count }}
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and push release tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          mapfile -t release_tags < <(git tag --sort=-creatordate | grep '^v[0-9]' || true)
+          head_commit="$(git rev-parse HEAD)"
+          previous_tag=""
+          new_tag=""
+          create_tag=false
+
+          if [ "${#release_tags[@]}" -gt 0 ]; then
+            latest_tag="${release_tags[0]}"
+            latest_commit="$(git rev-parse "${latest_tag}^{commit}")"
+            if [ "${latest_commit}" = "${head_commit}" ]; then
+              new_tag="${latest_tag}"
+              if [ "${#release_tags[@]}" -gt 1 ]; then
+                previous_tag="${release_tags[1]}"
+              fi
+            else
+              previous_tag="${latest_tag}"
+              create_tag=true
+            fi
+          else
+            create_tag=true
+          fi
+
+          if [ "${create_tag}" = true ]; then
+            build_date="$(date +'%Y.%m.%d')"
+            next_number=1
+            while true; do
+              candidate="v${build_date}-$(printf '%03d' "${next_number}")"
+              if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null || \
+                 git ls-remote --exit-code --tags origin "refs/tags/${candidate}" >/dev/null 2>&1; then
+                next_number=$((next_number + 1))
+                continue
+              fi
+              new_tag="${candidate}"
+              break
+            done
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "${new_tag}" "${head_commit}"
+            git push origin "${new_tag}"
+          fi
+
+          if [ -n "${previous_tag}" ]; then
+            range="${previous_tag}..${new_tag}"
+            previous_label="${previous_tag}"
+            commit_count="$(git rev-list --count "${range}")"
+          else
+            range=""
+            previous_label="начало истории"
+            commit_count="$(git rev-list --count "${new_tag}")"
+          fi
+
+          if [ "${commit_count}" -eq 0 ]; then
+            echo "There are no commits to release."
+            exit 1
+          fi
+
+          {
+            echo "new_tag=${new_tag}"
+            echo "previous_label=${previous_label}"
+            echo "range=${range}"
+            echo "commit_count=${commit_count}"
+          } >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build Windows ZIP
+    needs: resolve-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.new_tag }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build compact self-bootstrap ZIP
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-release.outputs.new_tag }}
+        run: |
+          .\gradlew.bat packageBootstrapZip "-PreleaseVersion=$env:RELEASE_VERSION"
+          $asset = "build\release\YandexMediaRecovery-$env:RELEASE_VERSION.zip"
+          if (-not (Test-Path -LiteralPath $asset)) {
+            throw "Release ZIP was not created: $asset"
+          }
+
+      - name: Upload release ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-zip
+          path: build/release/YandexMediaRecovery-${{ needs.resolve-release.outputs.new_tag }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    name: Create draft release
+    needs:
+      - resolve-release
+      - build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-release.outputs.new_tag }}
+          fetch-depth: 0
+
+      - name: Generate notes from commits
+        if: needs.resolve-release.outputs.range != ''
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --verbose "${{ needs.resolve-release.outputs.range }}" --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Generate notes for the first release
+        if: needs.resolve-release.outputs.range == ''
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --verbose --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Download Windows ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-zip
+          path: release-asset
+
+      - name: Build release body
+        shell: bash
+        env:
+          NEW_TAG: ${{ needs.resolve-release.outputs.new_tag }}
+          PREVIOUS_LABEL: ${{ needs.resolve-release.outputs.previous_label }}
+          COMMIT_COUNT: ${{ needs.resolve-release.outputs.commit_count }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Yandex Media Recovery ${NEW_TAG}"
+            echo
+            echo "> Диапазон: \`${PREVIOUS_LABEL}...${NEW_TAG}\`"
+            echo "> Коммитов: ${COMMIT_COUNT}"
+            if [ "${PREVIOUS_LABEL}" != "начало истории" ]; then
+              echo "> Сравнение: https://github.com/${REPOSITORY}/compare/${PREVIOUS_LABEL}...${NEW_TAG}"
+            fi
+            echo
+            cat RELEASE_NOTES.md
+          } > RELEASE_BODY.md
+          cat RELEASE_BODY.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create draft release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ needs.resolve-release.outputs.new_tag }}
+          name: Yandex Media Recovery ${{ needs.resolve-release.outputs.new_tag }}
+          bodyFile: RELEASE_BODY.md
+          artifacts: release-asset/YandexMediaRecovery-${{ needs.resolve-release.outputs.new_tag }}.zip
+          draft: true
+          generateReleaseNotes: false
+          makeLatest: false
+          allowUpdates: true
+          updateOnlyUnreleased: true
