@@ -50,44 +50,22 @@ tasks.named('processResources') {
 def exeOutputDirectory = layout.buildDirectory.dir('exe')
 def exeApplicationDirectory = layout.buildDirectory.dir('exe/YandexMediaRecovery')
 def packagedLibraries = layout.buildDirectory.dir("install/${project.name}/lib")
-def runtimeDependencyArtifacts = providers.provider {
-    configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts
-            .findAll { artifact -> artifact.extension == 'jar' }
-            .toList()
-            .sort { left, right -> left.file.name <=> right.file.name }
-}
-def downloadableLibraryNames = providers.provider {
-    runtimeDependencyArtifacts.get().collect { artifact -> artifact.file.name }.toSet()
-}
-def runtimeDependencyManifest = layout.buildDirectory.file('generated/downloader/runtime-dependencies.tsv')
+def downloadableLibraryNames = [
+        'driver-1.58.0.jar',
+        'driver-bundle-1.58.0.jar',
+        'error_prone_annotations-2.41.0.jar',
+        'gson-2.13.2.jar',
+        'jcodec-0.2.5.jar',
+        'jcodec-javase-0.2.5.jar',
+        'jna-5.16.0.jar',
+        'jna-platform-5.16.0.jar',
+        'opentest4j-1.3.0.jar',
+        'playwright-1.58.0.jar',
+        'snakeyaml-2.3.jar'
+]
 def releaseArtifactVersion = providers.gradleProperty('releaseVersion').getOrElse(project.version.toString())
 def packagingLauncher = javaToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(21)
-}
-
-/** Собирает URL и имена всех JAR, разрешённых Gradle для запуска приложения. */
-tasks.register('writeRuntimeDependencyManifest') {
-    group = 'distribution'
-    description = 'Формирует манифест Maven-зависимостей для компактного загрузчика.'
-    inputs.files(configurations.runtimeClasspath)
-    outputs.file(runtimeDependencyManifest)
-
-    doLast {
-        List artifacts = runtimeDependencyArtifacts.get()
-        Set fileNames = artifacts.collect { artifact -> artifact.file.name } as Set
-        if (artifacts.isEmpty() || fileNames.size() != artifacts.size()) {
-            throw new GradleException('Невозможно сформировать однозначный список JAR-зависимостей для загрузчика.')
-        }
-        String manifest = artifacts.collect { artifact ->
-            def module = artifact.moduleVersion.id
-            def groupPath = module.group.replace('.', '/')
-            def url = "https://repo.maven.apache.org/maven2/${groupPath}/${artifact.name}/${module.version}/${artifact.file.name}"
-            "${url}\t${artifact.file.name}"
-        }.join(System.lineSeparator()) + System.lineSeparator()
-        File output = runtimeDependencyManifest.get().asFile
-        output.parentFile.mkdirs()
-        output.setText(manifest, 'UTF-8')
-    }
 }
 
 /**
@@ -144,17 +122,16 @@ tasks.register('packageBootstrapZip', Zip) {
     group = 'distribution'
     description = 'Создаёт компактный ZIP с EXE и BAT для загрузки зависимостей при первом запуске.'
     dependsOn(tasks.named('packageExe'))
-    dependsOn(':downloader:generateDownloadScript')
     archiveFileName = "YandexMediaRecovery-${releaseArtifactVersion}.zip"
     destinationDirectory = layout.buildDirectory.dir('release')
     from(exeApplicationDirectory) {
         into('YandexMediaRecovery')
         exclude('runtime/**')
-        exclude { details ->
-            details.path.startsWith('app/') && downloadableLibraryNames.get().contains(details.file.name)
+        downloadableLibraryNames.each { libraryName ->
+            exclude("app/${libraryName}")
         }
     }
-    from(layout.projectDirectory.file('downloader/build/generated/download-dependencies.bat')) {
+    from(layout.projectDirectory.file('installer/download-dependencies.bat')) {
         into('YandexMediaRecovery')
     }
 }
