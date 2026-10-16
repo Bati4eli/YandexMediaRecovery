@@ -17,7 +17,7 @@ public interface CloudPreviewExtractor {
      * Открывает окно браузера для ручного входа. Не поддерживающие авторизацию
      * реализации оставляют метод без действия.
      */
-    default void openLogin() throws IOException {
+    default YandexAccountInfo openLogin() throws IOException {
         throw new IOException("Вход в Яндекс Диск недоступен для этого источника превью");
     }
 

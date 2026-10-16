@@ -38,6 +38,7 @@ public final class PropertiesSettingsRepository {
     private static final String PARALLELISM_KEY = "parallelism";
     private static final String BROWSER_DEBUG_MODE_KEY = "browserDebugMode";
     private static final String SELECTED_FOLDERS_KEY = "selectedFolders";
+    private static final String YANDEX_ACCOUNT_EMAIL_KEY = "yandexAccountEmail";
     private final Path yamlFile;
     private final Path legacyPropertiesFile;
 
@@ -88,6 +89,7 @@ public final class PropertiesSettingsRepository {
                 .filter(folder -> folder.toAbsolutePath().normalize().startsWith(sourceRoot))
                 .map(folder -> portableRelativePath(sourceRoot.relativize(folder.toAbsolutePath().normalize())))
                 .toList());
+        values.put(YANDEX_ACCOUNT_EMAIL_KEY, settings.yandexAccountEmail());
 
         Path parent = yamlFile.getParent();
         if (parent != null) {
@@ -111,7 +113,8 @@ public final class PropertiesSettingsRepository {
                     booleanValue(values.get(DELETE_LOWER_QUALITY_PREVIEWS_KEY), true),
                     parallelismOrDefault(values.get(PARALLELISM_KEY)),
                     booleanValue(values.get(BROWSER_DEBUG_MODE_KEY), false),
-                    selectedFolders(values.get(SELECTED_FOLDERS_KEY), source));
+                    selectedFolders(values.get(SELECTED_FOLDERS_KEY), source),
+                    emailOrEmpty(values.get(YANDEX_ACCOUNT_EMAIL_KEY)));
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось загрузить YAML-настройки восстановления", exception);
             return defaults();
@@ -130,7 +133,7 @@ public final class PropertiesSettingsRepository {
                     Boolean.parseBoolean(properties.getProperty("previews.delete-lower-quality", "true")),
                     parallelismOrDefault(properties.getProperty("processing.parallelism")),
                     Boolean.parseBoolean(properties.getProperty("browser.debug-mode", "false")),
-                    migratedSelectedFolders(properties, source));
+                    migratedSelectedFolders(properties, source), "");
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось прочитать старые properties-настройки", exception);
             return defaults();
@@ -218,6 +221,14 @@ public final class PropertiesSettingsRepository {
         }
     }
 
+    private String emailOrEmpty(Object value) {
+        if (!(value instanceof String email)) {
+            return "";
+        }
+        String normalized = email.strip();
+        return normalized.matches("(?i)^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$") ? normalized : "";
+    }
+
     private int folderSelectionCount(String value) {
         try {
             return Math.max(0, Integer.parseInt(value == null ? "0" : value));
@@ -229,7 +240,7 @@ public final class PropertiesSettingsRepository {
 
     private RecoverySettings defaults() {
         return new RecoverySettings(RecoverySettings.DEFAULT_SOURCE, RecoverySettings.DEFAULT_DESTINATION,
-                false, true, RecoverySettings.DEFAULT_PARALLELISM, false, List.of());
+                false, true, RecoverySettings.DEFAULT_PARALLELISM, false, List.of(), "");
     }
 
     private void saveSafely(RecoverySettings settings, String message) {

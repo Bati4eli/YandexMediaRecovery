@@ -50,6 +50,7 @@ tasks.named('processResources') {
 def exeOutputDirectory = layout.buildDirectory.dir('exe')
 def exeApplicationDirectory = layout.buildDirectory.dir('exe/YandexMediaRecovery')
 def packagedLibraries = layout.buildDirectory.dir("install/${project.name}/lib")
+def generatedWindowsIcon = layout.buildDirectory.file('generated/windows-icon/YandexMediaRecovery.ico')
 def downloadableLibraryNames = [
         'driver-1.58.0.jar',
         'driver-bundle-1.58.0.jar',
@@ -68,6 +69,46 @@ def packagingLauncher = javaToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(21)
 }
 
+/** Создаёт ICO из исходного PNG-логотипа для launcher Windows. */
+tasks.register('generateWindowsIcon', Exec) {
+    group = 'distribution'
+    description = 'Создаёт ICO-иконку Windows из logo.png.'
+    inputs.file(layout.projectDirectory.file('logo.png'))
+    outputs.file(generatedWindowsIcon)
+
+    doFirst {
+        if (!System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')) {
+            throw new GradleException('generateWindowsIcon поддерживается только в Windows.')
+        }
+        generatedWindowsIcon.get().asFile.parentFile.mkdirs()
+        executable('powershell.exe')
+        args('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '''
+            Add-Type -AssemblyName System.Drawing
+            $source = [System.Drawing.Image]::FromFile($env:SOURCE_ICON)
+            $canvas = [System.Drawing.Bitmap]::new(256, 256, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            $graphics = [System.Drawing.Graphics]::FromImage($canvas)
+            $graphics.Clear([System.Drawing.Color]::Transparent)
+            $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $scale = [Math]::Min(256.0 / $source.Width, 256.0 / $source.Height)
+            $width = [int][Math]::Round($source.Width * $scale)
+            $height = [int][Math]::Round($source.Height * $scale)
+            $left = [int][Math]::Round((256 - $width) / 2.0)
+            $top = [int][Math]::Round((256 - $height) / 2.0)
+            $graphics.DrawImage($source, [System.Drawing.Rectangle]::new($left, $top, $width, $height))
+            $icon = [System.Drawing.Icon]::FromHandle($canvas.GetHicon())
+            $stream = [System.IO.File]::Open($env:TARGET_ICON, [System.IO.FileMode]::Create)
+            $icon.Save($stream)
+            $stream.Dispose()
+            $icon.Dispose()
+            $graphics.Dispose()
+            $canvas.Dispose()
+            $source.Dispose()
+        ''')
+        environment 'SOURCE_ICON', layout.projectDirectory.file('logo.png').asFile.absolutePath
+        environment 'TARGET_ICON', generatedWindowsIcon.get().asFile.absolutePath
+    }
+}
+
 /**
  * Собирает переносимое Windows-приложение с собственным Java Runtime.
  * Итоговый файл: build/exe/YandexMediaRecovery/YandexMediaRecovery.exe.
@@ -76,7 +117,9 @@ tasks.register('packageExe', Exec) {
     group = 'distribution'
     description = 'Создаёт автономный Windows EXE с Java Runtime через jpackage.'
     dependsOn(tasks.named('installDist'))
+    dependsOn(tasks.named('generateWindowsIcon'))
     inputs.dir(packagedLibraries)
+    inputs.file(generatedWindowsIcon)
     outputs.dir(exeOutputDirectory)
 
     doFirst {
@@ -95,6 +138,10 @@ tasks.register('packageExe', Exec) {
                 '--dest', exeOutputDirectory.get().asFile.absolutePath,
                 '--name', 'YandexMediaRecovery',
                 '--app-version', project.version.toString(),
+                '--vendor', 'bati4eli.ru',
+                '--description', 'Yandex Media Recovery',
+                '--copyright', 'Copyright © 2026 bati4eli.ru',
+                '--icon', generatedWindowsIcon.get().asFile.absolutePath,
                 '--input', packagedLibraries.get().asFile.absolutePath,
                 '--main-jar', "${project.name}-${project.version}.jar",
                 '--main-class', application.mainClass.get()

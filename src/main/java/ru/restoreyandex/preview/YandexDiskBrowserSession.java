@@ -42,13 +42,30 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
         debugMode = enabled;
     }
 
-    /** Открывает Chrome на Диске, чтобы пользователь выполнил вход вручную. */
-    public synchronized void openLogin() throws IOException {
+    /**
+     * Открывает Chrome на Диске, чтобы пользователь выполнил вход вручную.
+     *
+     * <p>После входа метод считывает отображаемое имя из карточки профиля,
+     * если страница позволяет его определить, и затем закрывает Chrome.
+     * Имя не сохраняется в профиль или файл настроек.</p>
+     *
+     * @return подтверждённая учётная запись; отображаемые поля могут быть пусты,
+     *         если карточка профиля недоступна или её разметка не распознана
+     */
+    public synchronized YandexAccountInfo openLogin() throws IOException {
         close();
         try {
             Page loginPage = ensurePage(false);
             loginPage.navigate(DISK_ROOT);
             waitForAuthenticatedDiskRoot(loginPage);
+            YandexAccountInfo account = readAuthenticatedAccount(loginPage)
+                    .orElseGet(YandexAccountInfo::authenticatedWithoutProfileDetails);
+            if (account.hasEmail()) {
+                ApplicationLogger.info("Вход в Яндекс Диск подтверждён: " + account.email());
+            } else {
+                ApplicationLogger.info("Вход в Яндекс Диск подтверждён; email аккаунта не удалось определить.");
+            }
+            return account;
         } catch (PlaywrightException | IOException exception) {
             ApplicationLogger.error("Не удалось открыть Chrome для входа в Яндекс Диск", exception);
             throw new IOException("Не удалось запустить Chrome для входа в Яндекс Диск", exception);
@@ -185,7 +202,7 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
         try {
             while (!loginPage.isClosed()) {
                 if (loginPage.url().startsWith(DISK_ROOT) && filesTab.count() > 0 && filesTab.first().isVisible()) {
-                    ApplicationLogger.info("Вход в Яндекс Диск подтверждён; окно Chrome закрывается.");
+                    ApplicationLogger.info("Вход в Яндекс Диск подтверждён; считываю имя аккаунта.");
                     return;
                 }
                 Thread.sleep(500);
@@ -195,6 +212,71 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
             throw new IOException("Ожидание входа в Яндекс Диск прервано", exception);
         }
         throw new IOException("Окно Chrome было закрыто до завершения входа в Яндекс Диск");
+    }
+
+    /**
+     * Открывает карточку профиля через доступную кнопку/аватар и читает её
+     * текст. Поиск сначала использует доступные подписи, затем — видимый
+     * аватар в левом нижнем углу: именно так Диск размещает переключатель
+     * аккаунта в текущем интерфейсе. Невозможность прочитать имя не влияет на
+     * авторизацию и не считается ошибкой входа.
+     */
+    private Optional<YandexAccountInfo> readAuthenticatedAccount(Page authenticatedPage) {
+        try {
+            boolean accountCardOpened = Boolean.TRUE.equals(authenticatedPage.evaluate("""
+                    () => {
+                        const isVisible = element => {
+                            const rect = element.getBoundingClientRect();
+                            const style = window.getComputedStyle(element);
+                            return rect.width > 0 && rect.height > 0
+                                    && style.display !== 'none' && style.visibility !== 'hidden';
+                        };
+                        const controls = Array.from(document.querySelectorAll('button,[role="button"],a'));
+                        const namedControl = controls.find(element => {
+                            const label = [element.getAttribute('aria-label'), element.getAttribute('title'),
+                                    element.textContent].filter(Boolean).join(' ').toLowerCase();
+                            return isVisible(element) && /аккаунт|профил|account|profile|yandex id/.test(label);
+                        });
+                        if (namedControl) {
+                            namedControl.click();
+                            return true;
+                        }
+                        const avatar = Array.from(document.querySelectorAll('[class*="avatar" i],[data-testid*="avatar" i]'))
+                                .find(element => {
+                                    const rect = element.getBoundingClientRect();
+                                    return isVisible(element) && rect.left < 140
+                                            && rect.bottom > window.innerHeight * 0.65;
+                                });
+                        const target = avatar && avatar.closest('button,[role="button"],a') || avatar;
+                        if (target) {
+                            target.click();
+                            return true;
+                        }
+                        const lowerLeft = document.elementFromPoint(32, Math.max(24, window.innerHeight - 32));
+                        const fallback = lowerLeft && lowerLeft.closest('button,[role="button"],a,[class*="avatar" i]');
+                        if (!fallback || !isVisible(fallback)) return false;
+                        fallback.click();
+                        return true;
+                    }
+                    """));
+            if (!accountCardOpened) {
+                ApplicationLogger.info("Карточка аккаунта Яндекс Диска не найдена; имя не будет показано.");
+                return Optional.empty();
+            }
+            for (int attempt = 0; attempt < 15; attempt++) {
+                Optional<YandexAccountInfo> accountName = YandexAccountNameParser.findAccount(
+                        authenticatedPage.locator("body").innerText());
+                if (accountName.isPresent()) {
+                    return accountName;
+                }
+                authenticatedPage.waitForTimeout(200);
+            }
+            ApplicationLogger.info("Карточка аккаунта открыта, но отображаемое имя не распознано.");
+            return Optional.empty();
+        } catch (PlaywrightException exception) {
+            ApplicationLogger.error("Не удалось прочитать имя аккаунта Яндекс Диска", exception);
+            return Optional.empty();
+        }
     }
 
     private Page ensurePage(boolean headless) {

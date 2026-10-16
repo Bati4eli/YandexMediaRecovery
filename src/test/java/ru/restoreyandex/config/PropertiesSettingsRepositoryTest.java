@@ -19,7 +19,8 @@ class PropertiesSettingsRepositoryTest {
     @Test
     void persistsPreviewSettingsAndParallelismInYaml() throws Exception {
         Path yamlFile = temporaryDirectory.resolve("settings.yaml");
-        RecoverySettings settings = new RecoverySettings(Path.of("C:/source"), Path.of("D:/destination"), true, false, 7, true);
+        RecoverySettings settings = new RecoverySettings(Path.of("C:/source"), Path.of("D:/destination"), true, false, 7,
+                true, List.of(), "user@example.org");
 
         new PropertiesSettingsRepository(yamlFile).save(settings);
         RecoverySettings loaded = new PropertiesSettingsRepository(yamlFile).load();
@@ -28,6 +29,7 @@ class PropertiesSettingsRepositoryTest {
         assertEquals(false, loaded.deleteLowerQualityPreviews());
         assertEquals(7, loaded.parallelism());
         assertTrue(loaded.browserDebugMode());
+        assertEquals("user@example.org", loaded.yandexAccountEmail());
         assertTrue(Files.readString(yamlFile, StandardCharsets.UTF_8).contains("sourceFolder:"));
     }
 
