@@ -48,6 +48,12 @@ class YandexDiskBrowserSessionTest {
     }
 
     @Test
+    void confirmsLoginWithoutParsingTheAccountProfile() {
+        assertThrows(NoSuchMethodException.class,
+                () -> YandexDiskBrowserSession.class.getDeclaredMethod("readAuthenticatedAccount", Page.class));
+    }
+
+    @Test
     void matchesOnlyThePreviewResponseForTheCurrentFileEvenWhenTheNameIsEncoded() {
         String fileName = "2007 Мотовыставка.JPG";
         String url = "https://1.downloader.disk.yandex.ru/preview/token?filename="

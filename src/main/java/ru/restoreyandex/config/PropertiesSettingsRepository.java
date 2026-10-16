@@ -38,8 +38,8 @@ public final class PropertiesSettingsRepository {
     private static final String PARALLELISM_KEY = "parallelism";
     private static final String BROWSER_DEBUG_MODE_KEY = "browserDebugMode";
     private static final String SELECTED_FOLDERS_KEY = "selectedFolders";
-    private static final String YANDEX_ACCOUNT_EMAIL_KEY = "yandexAccountEmail";
     private static final String YANDEX_AUTHENTICATION_CONFIRMED_KEY = "yandexAuthenticationConfirmed";
+    private static final String OBSOLETE_YANDEX_ACCOUNT_EMAIL_KEY = "yandexAccountEmail";
     private final Path yamlFile;
     private final Path legacyPropertiesFile;
 
@@ -90,7 +90,6 @@ public final class PropertiesSettingsRepository {
                 .filter(folder -> folder.toAbsolutePath().normalize().startsWith(sourceRoot))
                 .map(folder -> portableRelativePath(sourceRoot.relativize(folder.toAbsolutePath().normalize())))
                 .toList());
-        values.put(YANDEX_ACCOUNT_EMAIL_KEY, settings.yandexAccountEmail());
         values.put(YANDEX_AUTHENTICATION_CONFIRMED_KEY, settings.yandexAuthenticationConfirmed());
 
         Path parent = yamlFile.getParent();
@@ -109,15 +108,18 @@ public final class PropertiesSettingsRepository {
                 throw new IOException("Корень YAML-настроек должен быть объектом");
             }
             Path source = pathOrDefault(values.get(SOURCE_KEY), RecoverySettings.DEFAULT_SOURCE);
-            return new RecoverySettings(source,
+            RecoverySettings settings = new RecoverySettings(source,
                     pathOrDefault(values.get(DESTINATION_KEY), RecoverySettings.DEFAULT_DESTINATION),
                     booleanValue(values.get(OVERWRITE_PREVIEWS_KEY), false),
                     booleanValue(values.get(DELETE_LOWER_QUALITY_PREVIEWS_KEY), true),
                     parallelismOrDefault(values.get(PARALLELISM_KEY)),
                     booleanValue(values.get(BROWSER_DEBUG_MODE_KEY), false),
                     selectedFolders(values.get(SELECTED_FOLDERS_KEY), source),
-                    emailOrEmpty(values.get(YANDEX_ACCOUNT_EMAIL_KEY)),
                     booleanValue(values.get(YANDEX_AUTHENTICATION_CONFIRMED_KEY), false));
+            if (values.containsKey(OBSOLETE_YANDEX_ACCOUNT_EMAIL_KEY)) {
+                saveSafely(settings, "Не удалось удалить устаревший email из настроек");
+            }
+            return settings;
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось загрузить YAML-настройки восстановления", exception);
             return defaults();
@@ -136,7 +138,7 @@ public final class PropertiesSettingsRepository {
                     Boolean.parseBoolean(properties.getProperty("previews.delete-lower-quality", "true")),
                     parallelismOrDefault(properties.getProperty("processing.parallelism")),
                     Boolean.parseBoolean(properties.getProperty("browser.debug-mode", "false")),
-                    migratedSelectedFolders(properties, source), "", false);
+                    migratedSelectedFolders(properties, source), false);
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось прочитать старые properties-настройки", exception);
             return defaults();
@@ -224,14 +226,6 @@ public final class PropertiesSettingsRepository {
         }
     }
 
-    private String emailOrEmpty(Object value) {
-        if (!(value instanceof String email)) {
-            return "";
-        }
-        String normalized = email.strip();
-        return normalized.matches("(?i)^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$") ? normalized : "";
-    }
-
     private int folderSelectionCount(String value) {
         try {
             return Math.max(0, Integer.parseInt(value == null ? "0" : value));
@@ -243,7 +237,7 @@ public final class PropertiesSettingsRepository {
 
     private RecoverySettings defaults() {
         return new RecoverySettings(RecoverySettings.DEFAULT_SOURCE, RecoverySettings.DEFAULT_DESTINATION,
-                false, true, RecoverySettings.DEFAULT_PARALLELISM, false, List.of(), "", false);
+                false, true, RecoverySettings.DEFAULT_PARALLELISM, false, List.of(), false);
     }
 
     private void saveSafely(RecoverySettings settings, String message) {

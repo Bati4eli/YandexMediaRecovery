@@ -49,27 +49,16 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
     /**
      * Открывает Chrome на Диске, чтобы пользователь выполнил вход вручную.
      *
-     * <p>После входа метод считывает отображаемое имя из карточки профиля,
-     * если страница позволяет его определить, и затем закрывает Chrome.
-     * Имя не сохраняется в профиль или файл настроек.</p>
-     *
-     * @return подтверждённая учётная запись; отображаемые поля могут быть пусты,
-     *         если карточка профиля недоступна или её разметка не распознана
+     * <p>После появления раздела «Файлы» вход подтверждён и Chrome немедленно
+     * закрывается. Карточка профиля не открывается, имя и email не читаются.</p>
      */
-    public synchronized YandexAccountInfo openLogin() throws IOException {
+    public synchronized void openLogin() throws IOException {
         close();
         try {
             Page loginPage = ensurePage(false);
             loginPage.navigate(DISK_ROOT);
             waitForAuthenticatedDiskRoot(loginPage);
-            YandexAccountInfo account = readAuthenticatedAccount(loginPage)
-                    .orElseGet(YandexAccountInfo::authenticatedWithoutProfileDetails);
-            if (account.hasEmail()) {
-                ApplicationLogger.info("Вход в Яндекс Диск подтверждён: " + account.email());
-            } else {
-                ApplicationLogger.info("Вход в Яндекс Диск подтверждён; email аккаунта не удалось определить.");
-            }
-            return account;
+            ApplicationLogger.info("Вход в Яндекс Диск подтверждён; Chrome закрывается.");
         } catch (PlaywrightException | IOException exception) {
             ApplicationLogger.error("Не удалось открыть Chrome для входа в Яндекс Диск", exception);
             throw new IOException("Не удалось запустить Chrome для входа в Яндекс Диск", exception);
@@ -250,36 +239,6 @@ public final class YandexDiskBrowserSession implements AutoCloseable {
             throw new IOException("Ожидание входа в Яндекс Диск прервано", exception);
         }
         throw new IOException("Окно Chrome было закрыто до завершения входа в Яндекс Диск");
-    }
-
-    /**
-     * Открывает карточку профиля через доступную кнопку/аватар и читает её
-     * текст. Поиск сначала использует доступные подписи, затем — видимый
-     * аватар в левом нижнем углу: именно так Диск размещает переключатель
-     * аккаунта в текущем интерфейсе. Невозможность прочитать имя не влияет на
-     * авторизацию и не считается ошибкой входа.
-     */
-    private Optional<YandexAccountInfo> readAuthenticatedAccount(Page authenticatedPage) {
-        try {
-            boolean accountCardOpened = openAccountMenu(authenticatedPage);
-            if (!accountCardOpened) {
-                ApplicationLogger.info("Карточка аккаунта Яндекс Диска не найдена; имя не будет показано.");
-                return Optional.empty();
-            }
-            for (int attempt = 0; attempt < 15; attempt++) {
-                Optional<YandexAccountInfo> accountName = YandexAccountNameParser.findAccount(
-                        authenticatedPage.locator("body").innerText());
-                if (accountName.isPresent()) {
-                    return accountName;
-                }
-                authenticatedPage.waitForTimeout(200);
-            }
-            ApplicationLogger.info("Карточка аккаунта открыта, но отображаемое имя не распознано.");
-            return Optional.empty();
-        } catch (PlaywrightException exception) {
-            ApplicationLogger.error("Не удалось прочитать имя аккаунта Яндекс Диска", exception);
-            return Optional.empty();
-        }
     }
 
     /** Открывает карточку профиля через доступную подпись, аватар либо позицию аватара в левой панели. */

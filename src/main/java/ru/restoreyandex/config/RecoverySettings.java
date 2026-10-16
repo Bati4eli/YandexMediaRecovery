@@ -6,41 +6,33 @@ import java.util.List;
 /** Последние папки и параметры, выбранные пользователем для восстановления. */
 public record RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
                                boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode,
-                               List<Path> selectedFolders, String yandexAccountEmail,
-                               boolean yandexAuthenticationConfirmed) {
+                               List<Path> selectedFolders, boolean yandexAuthenticationConfirmed) {
     /** Создаёт настройки со включённым удалением превью худшего качества. */
     public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews, int parallelism) {
-        this(sourceFolder, destinationFolder, overwritePreviews, true, parallelism, false, List.of(), "", false);
+        this(sourceFolder, destinationFolder, overwritePreviews, true, parallelism, false, List.of(), false);
     }
 
     /** Создаёт настройки без отладочного показа браузера для старых вызовов. */
     public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
                             boolean deleteLowerQualityPreviews, int parallelism) {
-        this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism, false, List.of(), "", false);
+        this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism, false, List.of(), false);
     }
 
     /** Создаёт настройки без сохранённого состояния дерева для старых вызовов. */
     public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
                             boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode) {
         this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism,
-                browserDebugMode, List.of(), "", false);
+                browserDebugMode, List.of(), false);
     }
 
-    /** Создаёт настройки без сохранённого email авторизованного аккаунта. */
+    /** Создаёт настройки без подтверждённого статуса авторизации. */
     public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
                             boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode,
                             List<Path> selectedFolders) {
         this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism,
-                browserDebugMode, selectedFolders, "", false);
+                browserDebugMode, selectedFolders, false);
     }
 
-    /** Создаёт настройки без подтверждённого статуса входа для старых вызовов. */
-    public RecoverySettings(Path sourceFolder, Path destinationFolder, boolean overwritePreviews,
-                            boolean deleteLowerQualityPreviews, int parallelism, boolean browserDebugMode,
-                            List<Path> selectedFolders, String yandexAccountEmail) {
-        this(sourceFolder, destinationFolder, overwritePreviews, deleteLowerQualityPreviews, parallelism,
-                browserDebugMode, selectedFolders, yandexAccountEmail, false);
-    }
     /** Типовой путь Яндекс Диска внутри домашней папки текущего пользователя. */
     public static final Path DEFAULT_SOURCE = Path.of(System.getProperty("user.home"), "Yandex.Disk");
     public static final Path DEFAULT_DESTINATION = Path.of("D:\\YandexDisk-BACKUP");
@@ -52,6 +44,5 @@ public record RecoverySettings(Path sourceFolder, Path destinationFolder, boolea
             throw new IllegalArgumentException("Количество потоков должно быть от 1 до 10");
         }
         selectedFolders = List.copyOf(selectedFolders);
-        yandexAccountEmail = yandexAccountEmail == null ? "" : yandexAccountEmail.strip();
     }
 }

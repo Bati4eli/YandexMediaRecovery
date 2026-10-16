@@ -15,7 +15,6 @@ import ru.restoreyandex.preview.WindowsShellPreviewExtractor;
 import ru.restoreyandex.preview.CloudPreviewExtractor;
 import ru.restoreyandex.preview.YandexDiskBrowserPreviewExtractor;
 import ru.restoreyandex.preview.BrowserPreview;
-import ru.restoreyandex.preview.YandexAccountInfo;
 import ru.restoreyandex.logging.ApplicationLogger;
 
 import java.awt.image.BufferedImage;
@@ -86,8 +85,8 @@ public final class RecoveryService {
     }
 
     /** Открывает Chrome с сохранённым профилем для ручного входа в Яндекс Диск. */
-    public YandexAccountInfo openYandexDiskLogin() throws IOException {
-        return cloudPreviewExtractor.openLogin();
+    public void openYandexDiskLogin() throws IOException {
+        cloudPreviewExtractor.openLogin();
     }
 
     /** Выходит из аккаунта Яндекс Диска в изолированном браузерном профиле приложения. */

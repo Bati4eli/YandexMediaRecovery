@@ -24,8 +24,8 @@ public final class YandexDiskBrowserPreviewExtractor implements CloudPreviewExtr
 
     /** Открывает пользователю Chrome для входа в сохранённый профиль приложения. */
     @Override
-    public YandexAccountInfo openLogin() throws IOException {
-        return session.openLogin();
+    public void openLogin() throws IOException {
+        session.openLogin();
     }
 
     /** Выполняет фоновый выход из Яндекс Диска через профиль приложения. */

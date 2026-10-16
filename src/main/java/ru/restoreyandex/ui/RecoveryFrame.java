@@ -10,7 +10,6 @@ import ru.restoreyandex.logging.ApplicationLogger;
 import ru.restoreyandex.recovery.CsvRecoveryLogger;
 import ru.restoreyandex.recovery.RecoveryListener;
 import ru.restoreyandex.recovery.RecoveryService;
-import ru.restoreyandex.preview.YandexAccountInfo;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -76,7 +75,6 @@ public final class RecoveryFrame extends JFrame {
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
     private List<Path> savedSelectedFolders = List.of();
-    private String yandexAccountEmail;
     private boolean yandexAuthenticationConfirmed;
     private RecoveryWorker activeRecoveryWorker;
     private int logoutSpinnerFrame;
@@ -96,7 +94,6 @@ public final class RecoveryFrame extends JFrame {
         parallelismComboBox.setSelectedItem(settings.parallelism());
         browserDebugModeCheckBox.setSelected(settings.browserDebugMode());
         savedSelectedFolders = settings.selectedFolders();
-        yandexAccountEmail = settings.yandexAccountEmail();
         yandexAuthenticationConfirmed = settings.yandexAuthenticationConfirmed();
         setApplicationIcon();
         initialize();
@@ -307,27 +304,22 @@ public final class RecoveryFrame extends JFrame {
         yandexLoginButton.setEnabled(false);
         yandexLogoutButton.setEnabled(false);
         appendLog("Открываю Chrome для входа в Яндекс Диск…\n");
-        new SwingWorker<YandexAccountInfo, Void>() {
+        new SwingWorker<Void, Void>() {
             @Override
-            protected YandexAccountInfo doInBackground() throws Exception {
-                return recoveryService.openYandexDiskLogin();
+            protected Void doInBackground() throws Exception {
+                recoveryService.openYandexDiskLogin();
+                return null;
             }
 
             @Override
             protected void done() {
                 yandexLoginButton.setEnabled(true);
                 try {
-                    YandexAccountInfo account = get();
+                    get();
                     yandexAuthenticationConfirmed = true;
-                    if (account.hasEmail()) {
-                        yandexAccountEmail = account.email();
-                    }
                     saveCurrentSettings();
-                    showAuthenticatedYandexAccount(account);
-                    refreshYandexAccountControls();
-                    appendLog("✅ Вход в Яндекс Диск подтверждён"
-                            + (account.hasEmail() ? ": " + account.email() : ".")
-                            + " Chrome закрыт; браузерные превью готовы.\n");
+                    showAuthenticatedYandexAccount();
+                    appendLog("✅ Вход в Яндекс Диск подтверждён. Chrome закрыт; браузерные превью готовы.\n");
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                     ApplicationLogger.error("Ожидание открытия Chrome прервано", exception);
@@ -369,7 +361,6 @@ public final class RecoveryFrame extends JFrame {
                 try {
                     get();
                     yandexAuthenticationConfirmed = false;
-                    yandexAccountEmail = "";
                     saveCurrentSettings();
                     yandexAccountLabel.setText("Аккаунт Яндекс Диска: не авторизован");
                     refreshYandexAccountControls();
@@ -408,7 +399,7 @@ public final class RecoveryFrame extends JFrame {
             settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
                     overwritePreviewsCheckBox.isSelected(), deleteLowerQualityPreviewsCheckBox.isSelected(),
                     selectedParallelism(), browserDebugModeCheckBox.isSelected(), folderSelectionTree.selectedFolders(),
-                    yandexAccountEmail, yandexAuthenticationConfirmed));
+                    yandexAuthenticationConfirmed));
         } catch (Exception exception) {
             ApplicationLogger.error("Не удалось сохранить настройки", exception);
             JOptionPane.showMessageDialog(this, "Не удалось сохранить настройки: " + exception.getMessage(),
@@ -423,21 +414,13 @@ public final class RecoveryFrame extends JFrame {
     /** Показывает email, сохранённый после ранее успешно подтверждённого входа. */
     private void showSavedYandexAccount() {
         if (yandexAuthenticationConfirmed) {
-            yandexAccountLabel.setText(yandexAccountEmail.isBlank()
-                    ? "✅ Авторизация в Яндекс Диске подтверждена (сохранено)"
-                    : "✅ Авторизация: " + yandexAccountEmail + " (сохранено)");
+            yandexAccountLabel.setText("✅ Авторизация в Яндекс Диске подтверждена (сохранено)");
         }
     }
 
-    /** Отображает успешный результат текущего входа, даже если профиль не раскрыл email. */
-    private void showAuthenticatedYandexAccount(YandexAccountInfo account) {
-        if (account.hasDisplayName() && account.hasEmail()) {
-            yandexAccountLabel.setText("✅ Авторизация: " + account.displayName() + " (" + account.email() + ")");
-        } else if (account.hasEmail()) {
-            yandexAccountLabel.setText("✅ Авторизация: " + account.email());
-        } else {
-            yandexAccountLabel.setText("✅ Авторизация в Яндекс Диске подтверждена");
-        }
+    /** Отображает подтверждённый текущий вход без чтения данных профиля пользователя. */
+    private void showAuthenticatedYandexAccount() {
+        yandexAccountLabel.setText("✅ Авторизация в Яндекс Диске подтверждена");
     }
 
     /** Показывает только действие, соответствующее сохранённому состоянию авторизации. */

@@ -20,7 +20,7 @@ class PropertiesSettingsRepositoryTest {
     void persistsPreviewSettingsAndParallelismInYaml() throws Exception {
         Path yamlFile = temporaryDirectory.resolve("settings.yaml");
         RecoverySettings settings = new RecoverySettings(Path.of("C:/source"), Path.of("D:/destination"), true, false, 7,
-                true, List.of(), "user@example.org", true);
+                true, List.of(), true);
 
         new PropertiesSettingsRepository(yamlFile).save(settings);
         RecoverySettings loaded = new PropertiesSettingsRepository(yamlFile).load();
@@ -29,7 +29,6 @@ class PropertiesSettingsRepositoryTest {
         assertEquals(false, loaded.deleteLowerQualityPreviews());
         assertEquals(7, loaded.parallelism());
         assertTrue(loaded.browserDebugMode());
-        assertEquals("user@example.org", loaded.yandexAccountEmail());
         assertTrue(loaded.yandexAuthenticationConfirmed());
         assertTrue(Files.readString(yamlFile, StandardCharsets.UTF_8).contains("sourceFolder:"));
     }
@@ -78,5 +77,19 @@ class PropertiesSettingsRepositoryTest {
         new PropertiesSettingsRepository(yamlFile).load();
 
         assertTrue(Files.isRegularFile(yamlFile));
+    }
+
+    @Test
+    void removesEmailStoredByPreviousVersionWhileKeepingAuthenticationStatus() throws Exception {
+        Path yamlFile = temporaryDirectory.resolve("settings.yaml");
+        Files.writeString(yamlFile, "sourceFolder: C:/source\n"
+                + "destinationFolder: D:/destination\n"
+                + "yandexAccountEmail: user@example.org\n"
+                + "yandexAuthenticationConfirmed: true\n", StandardCharsets.UTF_8);
+
+        RecoverySettings loaded = new PropertiesSettingsRepository(yamlFile).load();
+
+        assertTrue(loaded.yandexAuthenticationConfirmed());
+        assertTrue(!Files.readString(yamlFile, StandardCharsets.UTF_8).contains("yandexAccountEmail"));
     }
 }
