@@ -1,23 +1,29 @@
 package ru.restoreyandex.media;
 
+import com.sun.jna.platform.win32.Kernel32;
+import com.sun.jna.platform.win32.WinBase;
+import com.sun.jna.platform.win32.WinNT;
 import ru.restoreyandex.domain.MediaInspection;
 import ru.restoreyandex.domain.MediaType;
 import ru.restoreyandex.logging.ApplicationLogger;
-
-import org.jcodec.api.FrameGrab;
-import org.jcodec.common.io.NIOUtils;
-import org.jcodec.common.io.SeekableByteChannel;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Iterator;
 
-/** Открывает пиксели изображения или декодируемый кадр видео перед копированием оригинала. */
+/**
+ * Проверяет, доступен ли оригинал локально перед копированием.
+ * Изображения декодируются, а видео проверяется чтением данных: доступный AVI
+ * должен быть сохранён независимо от того, поддерживает ли его кодек JCodec.
+ */
 public final class DefaultMediaInspector implements MediaInspector {
     @Override
     public MediaInspection inspect(Path file) {
@@ -27,7 +33,7 @@ public final class DefaultMediaInspector implements MediaInspector {
         }
         return switch (type) {
             case IMAGE -> new MediaInspection(type, canDecodeImage(file));
-            case VIDEO -> new MediaInspection(type, canDecodeVideo(file));
+            case VIDEO -> new MediaInspection(type, canReadLocalVideo(file));
             case UNSUPPORTED -> MediaInspection.unsupported();
         };
     }
@@ -38,13 +44,26 @@ public final class DefaultMediaInspector implements MediaInspector {
      * Проводника не является публичным API.
      */
     private boolean isOfflineCloudPlaceholder(Path file) {
-        try {
-            Object offline = Files.getAttribute(file, "dos:offline");
-            return Boolean.TRUE.equals(offline);
-        } catch (IOException | UnsupportedOperationException | IllegalArgumentException exception) {
-            ApplicationLogger.error("Не удалось прочитать Windows-флаг облачной заглушки: " + file, exception);
+        if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
             return false;
         }
+        try {
+            int attributes = Kernel32.INSTANCE.GetFileAttributes(file.toString());
+            if (attributes == WinBase.INVALID_FILE_ATTRIBUTES) {
+                ApplicationLogger.error("Не удалось прочитать Windows-атрибуты облачного файла: " + file,
+                        new IOException("GetFileAttributes failed with code " + Kernel32.INSTANCE.GetLastError()));
+                return false;
+            }
+            return isOfflineWindowsAttributes(attributes);
+        } catch (RuntimeException | LinkageError exception) {
+            ApplicationLogger.error("Не удалось прочитать Windows-атрибуты облачного файла: " + file, exception);
+            return false;
+        }
+    }
+
+    /** Возвращает {@code true}, если в нативных атрибутах Windows есть флаг OFFLINE. */
+    static boolean isOfflineWindowsAttributes(int attributes) {
+        return (attributes & WinNT.FILE_ATTRIBUTE_OFFLINE) != 0;
     }
 
     private boolean canDecodeImage(Path file) {
@@ -70,11 +89,16 @@ public final class DefaultMediaInspector implements MediaInspector {
         }
     }
 
-    private boolean canDecodeVideo(Path file) {
-        try (SeekableByteChannel channel = NIOUtils.readableChannel(file.toFile())) {
-            return FrameGrab.createFrameGrab(channel).getNativeFrame() != null;
-        } catch (Exception exception) {
-            ApplicationLogger.error("Не удалось декодировать видео: " + file, exception);
+    /**
+     * Проверяет содержимое локального видео без декодирования. Сначала вызывающий
+     * код отсекает {@code FILE_ATTRIBUTE_OFFLINE}, поэтому чтение не должно
+     * запускать загрузку облачной заглушки.
+     */
+    private boolean canReadLocalVideo(Path file) {
+        try (SeekableByteChannel channel = Files.newByteChannel(file, StandardOpenOption.READ)) {
+            return channel.size() > 0 && channel.read(ByteBuffer.allocate(1)) > 0;
+        } catch (IOException | RuntimeException exception) {
+            ApplicationLogger.error("Не удалось прочитать локальный видеооригинал: " + file, exception);
             return false;
         }
     }

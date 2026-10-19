@@ -357,6 +357,21 @@ class RecoveryServiceTest {
     }
 
     @Test
+    void copiesLocallyAvailableAviInsteadOfKeepingItsMiniPreview() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        byte[] original = {'R', 'I', 'F', 'F', 5, 6, 7, 8};
+        Files.write(source.resolve("legacy.avi"), original);
+        writeImage(destination.resolve("MINIPV_legacy.png"), Color.RED);
+
+        RecoveryReport report = serviceWithNoPreview().recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(1, report.copied());
+        assertArrayEquals(original, Files.readAllBytes(destination.resolve("legacy.avi")));
+        assertFalse(Files.exists(destination.resolve("MINIPV_legacy.png")));
+    }
+
+    @Test
     void doesNotDownloadBrowserPreviewAgainWhenWebpvFileAlreadyExists() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = temporaryDirectory.resolve("destination");

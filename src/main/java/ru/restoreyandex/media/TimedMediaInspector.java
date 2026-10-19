@@ -10,7 +10,7 @@ import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -25,9 +25,9 @@ import java.util.concurrent.TimeoutException;
  * ожидается ограниченное время. При таймауте файл считается недоступным: сервис
  * сразу переходит к попытке извлечь его превью.</p>
  *
- * <p>Пул намеренно ограничен. Если несколько системных вызовов уже зависли,
- * новые файлы не создают сотни потоков: они немедленно считаются недоступными,
- * но восстановление их кэшированных миниатюр продолжается.</p>
+ * <p>Пул и очередь намеренно ограничены. Очередь не позволяет доступному
+ * оригиналу получить ложный статус «недоступен» только потому, что предыдущая
+ * проверка ещё выполняется.</p>
  */
 public final class TimedMediaInspector implements MediaInspector, AutoCloseable {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(8);
@@ -52,13 +52,13 @@ public final class TimedMediaInspector implements MediaInspector, AutoCloseable 
         if (maximumWorkers < 1) {
             throw new IllegalArgumentException("Количество потоков должно быть положительным");
         }
-        executor = new ThreadPoolExecutor(0, maximumWorkers, 30, TimeUnit.SECONDS,
-                new SynchronousQueue<>(), daemonThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
+        executor = new ThreadPoolExecutor(maximumWorkers, maximumWorkers, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(maximumWorkers), daemonThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
     }
 
     /**
-     * Выполняет проверку с ограничением времени. При таймауте, отказе пула или
-     * ошибке возвращает «недоступен» с типом, определённым по расширению.
+     * Выполняет проверку с ограничением времени. При таймауте или ошибке
+     * возвращает «недоступен» с типом, определённым по расширению.
      */
     @Override
     public MediaInspection inspect(Path file) {
@@ -70,7 +70,7 @@ public final class TimedMediaInspector implements MediaInspector, AutoCloseable 
         try {
             task = executor.submit(() -> delegate.inspect(file));
         } catch (RejectedExecutionException exception) {
-            ApplicationLogger.info("Проверка оригинала пропущена; сразу ищу превью: " + file);
+            ApplicationLogger.info("Проверка оригинала отклонена после остановки восстановления: " + file);
             return MediaInspection.unreadable(mediaType);
         }
         try {

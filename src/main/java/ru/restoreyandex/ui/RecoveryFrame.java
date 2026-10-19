@@ -1,5 +1,6 @@
 package ru.restoreyandex.ui;
 
+import com.sun.jna.platform.win32.Shell32;
 import ru.restoreyandex.config.PropertiesSettingsRepository;
 import ru.restoreyandex.config.RecoverySettings;
 import ru.restoreyandex.config.ApplicationPaths;
@@ -45,6 +46,7 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -327,14 +329,56 @@ public final class RecoveryFrame extends JFrame {
         appendLog("Не удалось открыть в браузере: " + file + "\n");
     }
 
-    /** Открывает Проводник либо с выделением исходного файла, либо в папке восстановления. */
+    /** Открывает содержащую папку через Windows Shell, который корректно обрабатывает кириллицу в путях. */
     private void showInExplorer(Path path, boolean selectFile) {
+        Path folder = selectFile ? path.getParent() : path;
+        if (folder == null) {
+            reportExplorerError(path, new IllegalArgumentException("Не определена папка файла"));
+            return;
+        }
+        Path normalizedFolder = folder.toAbsolutePath().normalize();
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                if (!Files.isDirectory(normalizedFolder)) {
+                    throw new IOException("Папка не существует: " + normalizedFolder);
+                }
+                if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
+                    long result = Shell32.INSTANCE.ShellExecute(null, "open", normalizedFolder.toString(), null, null, 1)
+                            .longValue();
+                    if (result <= 32) {
+                        throw new IOException("Windows Shell вернул код " + result);
+                    }
+                } else if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
+                    Desktop.getDesktop().open(normalizedFolder.toFile());
+                } else {
+                    throw new UnsupportedOperationException("Системный файловый менеджер недоступен");
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    reportExplorerError(normalizedFolder, exception);
+                } catch (ExecutionException exception) {
+                    reportExplorerError(normalizedFolder,
+                            exception.getCause() == null ? exception : exception.getCause());
+                }
+            }
+        }.execute();
+    }
+
+    /** Логирует ошибку открытия папки после возврата управления интерфейсу. */
+    private void reportExplorerError(Path path, Throwable exception) {
         try {
-            String target = path.toAbsolutePath().normalize().toString();
-            new ProcessBuilder("explorer.exe", selectFile ? "/select," + target : target).start();
-        } catch (Exception exception) {
             ApplicationLogger.error("Не удалось открыть Проводник: " + path, exception);
-            appendLog("Не удалось открыть Проводник: " + path + "\n");
+            appendLog("Не удалось открыть папку: " + path + "\n");
+        } catch (RuntimeException ignored) {
+            // Ошибка журнала не должна завершать поток SwingWorker.
         }
     }
 
