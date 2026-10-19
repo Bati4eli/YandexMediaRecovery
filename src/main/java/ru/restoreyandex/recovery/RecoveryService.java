@@ -188,7 +188,6 @@ public final class RecoveryService {
                 case SKIP_UNSUPPORTED -> skipped(plan, counter);
             };
         } catch (Exception exception) {
-            counter.failed.incrementAndGet();
             ApplicationLogger.error("Ошибка восстановления файла: " + source, exception);
             return event(source, RecoveryOutcome.NO_FILE, "Ошибка: " + conciseMessage(exception));
         }
@@ -301,6 +300,9 @@ public final class RecoveryService {
      */
     private RecoveryEvent writePreview(RecoveryPlan plan, Path sourceRoot,
                                        RecoveryOptions options, Counter counter) throws IOException {
+        // С этого момента для файла уже нет доступного оригинала: планировщик
+        // направляет сюда только недекодируемые исходники без копии-оригинала в назначении.
+        counter.lostOriginals.incrementAndGet();
         Path explorerTarget = previewTarget(plan, MediaExtensions.previewName(plan.source()));
         Path miniTarget = previewTarget(plan, MediaExtensions.miniPreviewName(plan.source()));
         boolean usableExplorerPreview = hasUsableExplorerPreview(explorerTarget);
@@ -325,7 +327,9 @@ public final class RecoveryService {
                     RecoveryOutcome.EXPLORER_PREVIEW_SAVED, options.deleteLowerQualityPreviews(), counter);
         }
 
-        Optional<BrowserPreview> webPreview = cloudPreviewExtractor.extract(sourceRoot.relativize(plan.source()));
+        Optional<BrowserPreview> webPreview = MediaExtensions.supportsBrowserPreview(plan.source())
+                ? cloudPreviewExtractor.extract(sourceRoot.relativize(plan.source()))
+                : Optional.empty();
         if (webPreview.isPresent()) {
             BrowserPreview resource = webPreview.orElseThrow();
             Path webTarget = previewTarget(plan, MediaExtensions.webPreviewName(plan.source(), resource.extension()));
@@ -560,11 +564,11 @@ public final class RecoveryService {
         private final AtomicInteger previewsDeleted = new AtomicInteger();
         private final AtomicInteger skipped = new AtomicInteger();
         private final AtomicInteger previewsUnavailable = new AtomicInteger();
-        private final AtomicInteger failed = new AtomicInteger();
+        private final AtomicInteger lostOriginals = new AtomicInteger();
 
         private RecoveryReport toReport() {
             return new RecoveryReport(scanned.get(), copied.get(), previewsSaved.get(), previewsDeleted.get(), skipped.get(),
-                    previewsUnavailable.get(), failed.get());
+                    previewsUnavailable.get(), lostOriginals.get());
         }
     }
 }

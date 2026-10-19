@@ -2,7 +2,7 @@ package ru.restoreyandex.domain;
 
 /** Сводный итог завершённого запуска восстановления. */
 public record RecoveryReport(int scanned, int copied, int previewsSaved, int previewsDeleted, int skipped,
-                             int previewsUnavailable, int failed) {
+                             int previewsUnavailable, int lostOriginals) {
     /** Возвращает краткий итог на русском языке для журнала приложения. */
     public String toDisplayString() {
         return "✅ Восстановление завершено\n\n"
@@ -12,6 +12,6 @@ public record RecoveryReport(int scanned, int copied, int previewsSaved, int pre
                 + "🧹 Превью худшего качества удалено: %d\n".formatted(previewsDeleted)
                 + "⏭️ Без изменений: %d\n".formatted(skipped)
                 + "⚠️ Превью недоступно: %d\n".formatted(previewsUnavailable)
-                + "❌ Ошибок: %d".formatted(failed);
+                + "💔 Утеряно оригиналов: %d".formatted(lostOriginals);
     }
 }

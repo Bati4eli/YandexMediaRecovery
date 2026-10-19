@@ -30,6 +30,17 @@ public final class MediaExtensions {
         return VIDEO_EXTENSIONS.contains(extension) ? MediaType.VIDEO : MediaType.UNSUPPORTED;
     }
 
+    /**
+     * Разрешает веб-превью только для фотографий и растровых изображений:
+     * JPG, JPEG, PNG, GIF, BMP, WBMP, TIF и TIFF. Видео браузером не открываем.
+     */
+    public static boolean supportsBrowserPreview(Path file) {
+        String name = file.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        return dot >= 1 && dot < name.length() - 1
+                && IMAGE_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
+    }
+
     /** Строит имя PNG-превью из локального кэша Windows Explorer с префиксом {@code PREW_}. */
     public static String previewName(Path source) {
         return previewName(source, "PREW_");

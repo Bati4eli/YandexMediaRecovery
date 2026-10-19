@@ -10,6 +10,7 @@ import ru.restoreyandex.logging.ApplicationLogger;
 import ru.restoreyandex.recovery.CsvRecoveryLogger;
 import ru.restoreyandex.recovery.RecoveryListener;
 import ru.restoreyandex.recovery.RecoveryService;
+import ru.restoreyandex.preview.YandexDiskUrlBuilder;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -23,7 +24,6 @@ import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
-import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
@@ -58,7 +58,22 @@ public final class RecoveryFrame extends JFrame {
     private final JTextField sourceField = new JTextField();
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
-    private final JTextArea logArea = new JTextArea();
+    private final RecoveryLogView logView = new RecoveryLogView(new RecoveryLogView.FileActions() {
+        @Override
+        public void showInBrowser(Path file) {
+            openFileInSystemBrowser(file);
+        }
+
+        @Override
+        public void showInYandexFolder(Path file) {
+            showInExplorer(file, true);
+        }
+
+        @Override
+        public void showInRecoveryFolder(Path folder) {
+            showInExplorer(folder, false);
+        }
+    });
     private final FolderSelectionTree folderSelectionTree = new FolderSelectionTree();
     private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью");
     private final JCheckBox deleteLowerQualityPreviewsCheckBox = new JCheckBox("Удалять менее качественные превью");
@@ -124,10 +139,6 @@ public final class RecoveryFrame extends JFrame {
         setLocationByPlatform(true);
         sourceField.setEditable(false);
         destinationField.setEditable(false);
-        logArea.setEditable(false);
-        logArea.setFont(logArea.getFont().deriveFont(Font.PLAIN, 16f));
-        logArea.setLineWrap(true);
-        logArea.setWrapStyleWord(true);
         progressBar.setStringPainted(true);
         progressBar.setString("Ожидание запуска");
 
@@ -182,7 +193,7 @@ public final class RecoveryFrame extends JFrame {
         top.add(folders, BorderLayout.CENTER);
         top.add(controls, BorderLayout.SOUTH);
 
-        JSplitPane workspace = new JSplitPane(JSplitPane.VERTICAL_SPLIT, folderSelectionTree, new JScrollPane(logArea));
+        JSplitPane workspace = new JSplitPane(JSplitPane.VERTICAL_SPLIT, folderSelectionTree, new JScrollPane(logView));
         workspace.setResizeWeight(0.45);
         workspace.setDividerLocation(255);
         JPanel center = new JPanel(new BorderLayout(0, 8));
@@ -276,6 +287,57 @@ public final class RecoveryFrame extends JFrame {
         recoveryService.cancel();
     }
 
+    /** Открывает страницу файла Яндекс Диска в браузере системы без блокировки меню Swing. */
+    private void openFileInSystemBrowser(Path file) {
+        URI viewerUri;
+        try {
+            viewerUri = YandexDiskUrlBuilder.viewerUri(Path.of(sourceField.getText()), file);
+        } catch (Exception exception) {
+            reportSystemBrowserError(file, exception);
+            return;
+        }
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                if (!Desktop.isDesktopSupported() || !Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                    throw new UnsupportedOperationException("Системный браузер недоступен");
+                }
+                Desktop.getDesktop().browse(viewerUri);
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    reportSystemBrowserError(file, exception);
+                } catch (ExecutionException exception) {
+                    reportSystemBrowserError(file,
+                            exception.getCause() == null ? exception : exception.getCause());
+                }
+            }
+        }.execute();
+    }
+
+    /** Сообщает об ошибке запуска внешнего браузера после возврата управления UI. */
+    private void reportSystemBrowserError(Path file, Throwable exception) {
+        ApplicationLogger.error("Не удалось открыть файл в системном браузере: " + file, exception);
+        appendLog("Не удалось открыть в браузере: " + file + "\n");
+    }
+
+    /** Открывает Проводник либо с выделением исходного файла, либо в папке восстановления. */
+    private void showInExplorer(Path path, boolean selectFile) {
+        try {
+            String target = path.toAbsolutePath().normalize().toString();
+            new ProcessBuilder("explorer.exe", selectFile ? "/select," + target : target).start();
+        } catch (Exception exception) {
+            ApplicationLogger.error("Не удалось открыть Проводник: " + path, exception);
+            appendLog("Не удалось открыть Проводник: " + path + "\n");
+        }
+    }
+
     /** Открывает страницу исходного кода в системном браузере пользователя. */
     private void openProjectRepository() {
         try {
@@ -332,7 +394,7 @@ public final class RecoveryFrame extends JFrame {
                 } finally {
                     refreshYandexAccountControls();
                 }
-                logArea.setCaretPosition(logArea.getDocument().getLength());
+                logView.scrollToEnd();
             }
         }.execute();
     }
@@ -377,21 +439,35 @@ public final class RecoveryFrame extends JFrame {
                             "Яндекс Диск", JOptionPane.WARNING_MESSAGE);
                 }
                 refreshYandexAccountControls();
-                logArea.setCaretPosition(logArea.getDocument().getLength());
+                logView.scrollToEnd();
             }
         }.execute();
     }
 
-    private void updateProgress(RecoveryEvent event, Path sourceRoot) {
+    private void updateProgress(RecoveryEvent event, Path sourceRoot, Path destinationRoot) {
         progressBar.setIndeterminate(false);
         progressBar.setMaximum(Math.max(event.total(), 1));
         progressBar.setValue(event.processed());
         progressBar.setString(event.processed() + " / " + event.total());
         if (event.outcome() != ru.restoreyandex.domain.RecoveryOutcome.ALREADY_OK) {
-            appendLog(RecoveryLogLineFormatter.format(event, sourceRoot) + "\n");
+            Path recoveryFolder = recoveryFolderFor(event.source(), sourceRoot, destinationRoot);
+            logView.appendFile(RecoveryLogLineFormatter.format(event, sourceRoot), event.source(), recoveryFolder);
+            ApplicationLogger.info(RecoveryLogLineFormatter.format(event, sourceRoot));
         }
-        logArea.setCaretPosition(logArea.getDocument().getLength());
+        logView.scrollToEnd();
         progressBar.paintImmediately(progressBar.getVisibleRect());
+    }
+
+    /** Возвращает папку назначения, соответствующую исходной строке журнала. */
+    private Path recoveryFolderFor(Path source, Path sourceRoot, Path destinationRoot) {
+        Path normalizedSource = source.toAbsolutePath().normalize();
+        Path normalizedRoot = sourceRoot.toAbsolutePath().normalize();
+        if (!normalizedSource.startsWith(normalizedRoot)) {
+            return destinationRoot;
+        }
+        Path relative = normalizedRoot.relativize(normalizedSource);
+        Path parent = relative.getParent();
+        return parent == null ? destinationRoot : destinationRoot.resolve(parent);
     }
 
     private void saveCurrentSettings() {
@@ -472,7 +548,7 @@ public final class RecoveryFrame extends JFrame {
                     @Override
                     public void onFileProcessed(RecoveryEvent event) {
                         csvLogger.onFileProcessed(event);
-                        updateProgressOnEdt(event, source);
+                        updateProgressOnEdt(event, source, destination);
                     }
                 });
             }
@@ -513,13 +589,13 @@ public final class RecoveryFrame extends JFrame {
      * следующему. Это не даёт очереди EDT скрыть прогресс при массовом
      * пропуске уже восстановленных файлов.
      */
-    private void updateProgressOnEdt(RecoveryEvent event, Path sourceRoot) {
+    private void updateProgressOnEdt(RecoveryEvent event, Path sourceRoot, Path destinationRoot) {
         if (SwingUtilities.isEventDispatchThread()) {
-            updateProgress(event, sourceRoot);
+            updateProgress(event, sourceRoot, destinationRoot);
             return;
         }
         try {
-            SwingUtilities.invokeAndWait(() -> updateProgress(event, sourceRoot));
+            SwingUtilities.invokeAndWait(() -> updateProgress(event, sourceRoot, destinationRoot));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             ApplicationLogger.error("Поток восстановления прерван при обновлении прогресса", exception);
@@ -530,15 +606,13 @@ public final class RecoveryFrame extends JFrame {
 
     /** Выводит сообщение и в видимый журнал, и в stdout запущенного приложения. */
     private void appendLog(String message) {
-        logArea.append(message);
+        logView.appendMessage(message);
         ApplicationLogger.info(message.stripTrailing());
-        logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
     /** Заменяет видимый журнал и дублирует начальное сообщение в stdout. */
     private void replaceLog(String message) {
-        logArea.setText(message);
+        logView.replaceWith(message);
         ApplicationLogger.info(message.stripTrailing());
-        logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 }

@@ -248,9 +248,72 @@ class RecoveryServiceTest {
                 ignored -> Optional.empty(), ignored -> Optional.empty(),
                 ignored -> Optional.of(image(Color.MAGENTA)), new SafeFileWriter());
 
-        service.recover(source, destination, new RecoveryListener() { });
+        RecoveryReport report = service.recover(source, destination, new RecoveryListener() { });
 
         assertEquals(Color.MAGENTA.getRGB(), ImageIO.read(destination.resolve("MINIPV_lost.png").toFile()).getRGB(0, 0));
+        assertEquals(1, report.lostOriginals());
+    }
+
+    @Test
+    void doesNotRequestBrowserPreviewForVideoFiles() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = temporaryDirectory.resolve("destination");
+        Files.writeString(source.resolve("movie.mp4"), "unavailable video");
+        AtomicInteger browserRequests = new AtomicInteger();
+        AtomicInteger miniPreviewRequests = new AtomicInteger();
+        MediaInspector unavailableVideo = ignored -> MediaInspection.unreadable(MediaType.VIDEO);
+        CloudPreviewExtractor browser = ignored -> {
+            browserRequests.incrementAndGet();
+            return Optional.of(browserPreview(Color.BLUE));
+        };
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableVideo,
+                ignored -> Optional.empty(), browser, ignored -> {
+                    miniPreviewRequests.incrementAndGet();
+                    return Optional.empty();
+                }, new SafeFileWriter());
+
+        service.recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(0, browserRequests.get());
+        assertEquals(1, miniPreviewRequests.get());
+    }
+
+    @Test
+    void countsLostOriginalWhenNoPreviewCouldBeRecovered() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = temporaryDirectory.resolve("destination");
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+                ignored -> Optional.empty(), ignored -> Optional.empty(),
+                ignored -> Optional.empty(), new SafeFileWriter());
+
+        RecoveryReport report = service.recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(1, report.lostOriginals());
+        assertTrue(report.toDisplayString().contains("Утеряно оригиналов: 1"));
+    }
+
+    @Test
+    void doesNotCountUnsupportedFileAsLostOriginal() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Files.writeString(source.resolve("note.txt"), "not media");
+
+        RecoveryReport report = serviceWithNoPreview().recover(source, temporaryDirectory.resolve("destination"),
+                new RecoveryListener() { });
+
+        assertEquals(0, report.lostOriginals());
+    }
+
+    @Test
+    void doesNotCountLostOriginalWhenItAlreadyExistsInRecoveryFolder() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
+        Files.writeString(destination.resolve("lost.jpg"), "protected recovered original");
+
+        RecoveryReport report = serviceWithNoPreview().recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(0, report.lostOriginals());
     }
 
     @Test

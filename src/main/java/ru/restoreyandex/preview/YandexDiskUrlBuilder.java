@@ -43,6 +43,21 @@ public final class YandexDiskUrlBuilder {
                 + "?idApp=client&dialog=slider&idDialog=" + encode(diskPath));
     }
 
+    /**
+     * Строит URL просмотра файла по его абсолютному пути внутри выбранного
+     * локального корня Яндекс Диска.
+     *
+     * @throws IllegalArgumentException если файл находится вне корня Яндекс Диска
+     */
+    public static URI viewerUri(Path yandexRoot, Path sourceFile) {
+        Path root = Objects.requireNonNull(yandexRoot).toAbsolutePath().normalize();
+        Path source = Objects.requireNonNull(sourceFile).toAbsolutePath().normalize();
+        if (!source.startsWith(root)) {
+            throw new IllegalArgumentException("Файл находится вне корня Яндекс Диска: " + source);
+        }
+        return viewerUri(root.relativize(source));
+    }
+
     /** Заменяет размер в уже подписанном URL превью, не меняя остальные параметры. */
     public static URI largestPreviewUri(URI previewUri) {
         Objects.requireNonNull(previewUri);

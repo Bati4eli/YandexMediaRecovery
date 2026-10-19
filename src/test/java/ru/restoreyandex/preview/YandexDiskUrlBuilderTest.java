@@ -20,6 +20,16 @@ class YandexDiskUrlBuilderTest {
     }
 
     @Test
+    void buildsViewerUrlForFileInsideConfiguredYandexRoot() {
+        URI uri = YandexDiskUrlBuilder.viewerUri(Path.of("C:/Users/user/Yandex.Disk"),
+                Path.of("C:/Users/user/Yandex.Disk/MEDIA/2005 дача/photo.jpg"));
+
+        assertEquals("https://disk.yandex.ru/client/disk/MEDIA/2005%20%D0%B4%D0%B0%D1%87%D0%B0"
+                        + "?idApp=client&dialog=slider&idDialog=%2Fdisk%2FMEDIA%2F2005%20%D0%B4%D0%B0%D1%87%D0%B0%2Fphoto.jpg",
+                uri.toASCIIString());
+    }
+
+    @Test
     void requestsLargestPreviewByReplacingOnlySizeParameter() {
         URI preview = URI.create("https://downloader.disk.yandex.ru/preview/token?filename=photo.jpg&size=974x1242&token=x");
 
