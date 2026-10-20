@@ -18,6 +18,8 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseMotionAdapter;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -27,6 +29,7 @@ import java.util.Objects;
 final class RecoveryLogView extends JList<RecoveryLogEntry> {
     private static final String ACTION_ICON = "⋮";
     private final DefaultListModel<RecoveryLogEntry> model = new DefaultListModel<>();
+    private final Map<Path, Integer> runningFileIndexes = new HashMap<>();
     private final FileActions actions;
     private int hoveredIndex = -1;
 
@@ -55,9 +58,41 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
         scrollToEnd();
     }
 
+    /** Добавляет строку файла, который начал обрабатываться, и запоминает её для итоговой замены. */
+    void appendRunningFile(String text, Path source, Path recoveryFolder) {
+        Path key = normalized(source);
+        Integer existingIndex = runningFileIndexes.get(key);
+        RecoveryLogEntry entry = new RecoveryLogEntry(text, source, recoveryFolder);
+        if (existingIndex != null) {
+            model.set(existingIndex, entry);
+            repaint(getCellBounds(existingIndex, existingIndex));
+        } else {
+            int index = model.size();
+            model.addElement(entry);
+            runningFileIndexes.put(key, index);
+        }
+        scrollToEnd();
+    }
+
+    /** Заменяет строку текущего файла итоговым статусом, не добавляя дубль в журнал. */
+    void replaceRunningFile(String text, Path source, Path recoveryFolder) {
+        Path key = normalized(source);
+        Integer index = runningFileIndexes.remove(key);
+        RecoveryLogEntry entry = new RecoveryLogEntry(text, source, recoveryFolder);
+        if (index == null) {
+            model.addElement(entry);
+            scrollToEnd();
+            return;
+        }
+        model.set(index, entry);
+        repaint(getCellBounds(index, index));
+        ensureIndexIsVisible(index);
+    }
+
     /** Очищает журнал и показывает начальное сообщение. */
     void replaceWith(String message) {
         model.clear();
+        runningFileIndexes.clear();
         appendMessage(message);
     }
 
@@ -137,6 +172,10 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
     private int indexAt(Point point) {
         int index = locationToIndex(point);
         return index >= 0 && getCellBounds(index, index).contains(point) ? index : -1;
+    }
+
+    private Path normalized(Path path) {
+        return path.toAbsolutePath().normalize();
     }
 
     /** Действия с путями выполняет окно, чтобы все ошибки попали в единый журнал приложения. */

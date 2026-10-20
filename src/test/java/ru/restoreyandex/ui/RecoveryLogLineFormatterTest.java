@@ -29,4 +29,13 @@ class RecoveryLogLineFormatterTest {
 
         assertEquals("❌ NO_FILE — " + source.normalize(), RecoveryLogLineFormatter.format(event, sourceRoot));
     }
+
+    @Test
+    void showsTheFileTakenByWorkerBeforeItsFinalStatus() {
+        Path sourceRoot = Path.of("C:/media/source").toAbsolutePath();
+        Path source = sourceRoot.resolve("2011/wedding/Skes.mpg");
+
+        assertEquals("⏳ В работе [2 / 10] — 2011\\wedding\\Skes.mpg",
+                RecoveryLogLineFormatter.formatRunning(source, 2, 10, sourceRoot));
+    }
 }

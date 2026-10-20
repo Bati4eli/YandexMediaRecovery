@@ -24,11 +24,21 @@ final class RecoveryLogLineFormatter {
     static String format(RecoveryEvent event, Path sourceRoot) {
         Objects.requireNonNull(event);
         Objects.requireNonNull(sourceRoot);
+        return event.outcome().screenStatus() + " — " + displayPath(event.source(), sourceRoot);
+    }
+
+    /** Формирует временную строку для файла, который уже взят рабочим потоком. */
+    static String formatRunning(Path source, int started, int total, Path sourceRoot) {
+        Objects.requireNonNull(source);
+        Objects.requireNonNull(sourceRoot);
+        return "⏳ В работе [%d / %d] — %s".formatted(started, total, displayPath(source, sourceRoot));
+    }
+
+    private static Path displayPath(Path source, Path sourceRoot) {
         Path normalizedRoot = sourceRoot.toAbsolutePath().normalize();
-        Path normalizedSource = event.source().toAbsolutePath().normalize();
-        Path displayPath = normalizedSource.startsWith(normalizedRoot)
+        Path normalizedSource = source.toAbsolutePath().normalize();
+        return normalizedSource.startsWith(normalizedRoot)
                 ? normalizedRoot.relativize(normalizedSource)
                 : normalizedSource;
-        return event.outcome().screenStatus() + " — " + displayPath;
     }
 }

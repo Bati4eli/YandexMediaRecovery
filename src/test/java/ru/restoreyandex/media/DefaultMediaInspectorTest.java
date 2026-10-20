@@ -16,9 +16,11 @@ class DefaultMediaInspectorTest {
     Path temporaryDirectory;
 
     @Test
-    void distinguishesPinnedYandexFileFromOfflineCloudPlaceholder() {
-        assertFalse(DefaultMediaInspector.isOfflineWindowsAttributes(0x80420));
-        assertTrue(DefaultMediaInspector.isOfflineWindowsAttributes(0x481620));
+    void copiesOnlyPinnedCloudFileAndNeverHydratesAmbiguousReparsePoint() {
+        assertTrue(DefaultMediaInspector.hasLocalWindowsContent(0x80420));
+        assertFalse(DefaultMediaInspector.hasLocalWindowsContent(0x481620));
+        assertFalse(DefaultMediaInspector.hasLocalWindowsContent(0x420));
+        assertTrue(DefaultMediaInspector.hasLocalWindowsContent(0x20));
     }
 
     @Test

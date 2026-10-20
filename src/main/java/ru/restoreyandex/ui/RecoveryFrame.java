@@ -493,13 +493,25 @@ public final class RecoveryFrame extends JFrame {
         progressBar.setMaximum(Math.max(event.total(), 1));
         progressBar.setValue(event.processed());
         progressBar.setString(event.processed() + " / " + event.total());
+        Path recoveryFolder = recoveryFolderFor(event.source(), sourceRoot, destinationRoot);
+        String line = RecoveryLogLineFormatter.format(event, sourceRoot);
+        logView.replaceRunningFile(line, event.source(), recoveryFolder);
         if (event.outcome() != ru.restoreyandex.domain.RecoveryOutcome.ALREADY_OK) {
-            Path recoveryFolder = recoveryFolderFor(event.source(), sourceRoot, destinationRoot);
-            logView.appendFile(RecoveryLogLineFormatter.format(event, sourceRoot), event.source(), recoveryFolder);
-            ApplicationLogger.info(RecoveryLogLineFormatter.format(event, sourceRoot));
+            ApplicationLogger.info(line);
         }
-        logView.scrollToEnd();
         progressBar.paintImmediately(progressBar.getVisibleRect());
+    }
+
+    /** Добавляет временную строку для файла, который уже взял рабочий поток. */
+    private void showRunningFileOnEdt(Path file, int started, int totalFiles, Path sourceRoot, Path destinationRoot) {
+        Runnable update = () -> logView.appendRunningFile(
+                RecoveryLogLineFormatter.formatRunning(file, started, totalFiles, sourceRoot), file,
+                recoveryFolderFor(file, sourceRoot, destinationRoot));
+        if (SwingUtilities.isEventDispatchThread()) {
+            update.run();
+        } else {
+            SwingUtilities.invokeLater(update);
+        }
     }
 
     /** Возвращает папку назначения, соответствующую исходной строке журнала. */
@@ -587,6 +599,11 @@ public final class RecoveryFrame extends JFrame {
                             progressBar.setString("0 / " + totalFiles);
                             appendLog("CSV-лог: " + csvLogger.file() + "\n");
                         });
+                    }
+
+                    @Override
+                    public void onFileStarted(Path file, int started, int totalFiles) {
+                        showRunningFileOnEdt(file, started, totalFiles, source, destination);
                     }
 
                     @Override

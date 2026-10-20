@@ -16,10 +16,13 @@ import java.nio.file.Path;
  * копируются побайтно независимо от расширения и установленного кодека.
  */
 public final class DefaultMediaInspector implements MediaInspector {
+    private static final int FILE_ATTRIBUTE_PINNED = 0x0008_0000;
+    private static final int FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x0040_0000;
+
     @Override
     public MediaInspection inspect(Path file) {
         MediaType type = MediaExtensions.typeOf(file);
-        if (isOfflineCloudPlaceholder(file)) {
+        if (!isLocallyAvailable(file)) {
             return MediaInspection.unreadable(type);
         }
         return MediaInspection.readable(type);
@@ -30,9 +33,9 @@ public final class DefaultMediaInspector implements MediaInspector {
      * различие между локальным оригиналом и облачным объектом, хотя оверлей
      * Проводника не является публичным API.
      */
-    private boolean isOfflineCloudPlaceholder(Path file) {
+    private boolean isLocallyAvailable(Path file) {
         if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
-            return false;
+            return true;
         }
         try {
             int attributes = Kernel32.INSTANCE.GetFileAttributes(file.toString());
@@ -41,16 +44,25 @@ public final class DefaultMediaInspector implements MediaInspector {
                         new IOException("GetFileAttributes failed with code " + Kernel32.INSTANCE.GetLastError()));
                 return false;
             }
-            return isOfflineWindowsAttributes(attributes);
+            return hasLocalWindowsContent(attributes);
         } catch (RuntimeException | LinkageError exception) {
             ApplicationLogger.error("Не удалось прочитать Windows-атрибуты облачного файла: " + file, exception);
             return false;
         }
     }
 
-    /** Возвращает {@code true}, если в нативных атрибутах Windows есть флаг OFFLINE. */
-    static boolean isOfflineWindowsAttributes(int attributes) {
-        return (attributes & WinNT.FILE_ATTRIBUTE_OFFLINE) != 0;
+    /**
+     * Проверяет локальное содержимое по нативным атрибутам Windows. Облачный
+     * reparse-point допускается к копированию только при флаге PINNED: простое
+     * отсутствие OFFLINE не гарантирует, что Windows не начнёт загрузку файла.
+     */
+    static boolean hasLocalWindowsContent(int attributes) {
+        if ((attributes & WinNT.FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+            return true;
+        }
+        return (attributes & FILE_ATTRIBUTE_PINNED) != 0
+                && (attributes & WinNT.FILE_ATTRIBUTE_OFFLINE) == 0
+                && (attributes & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) == 0;
     }
 
 }
