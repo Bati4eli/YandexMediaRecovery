@@ -172,14 +172,17 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
         setSelectedIndex(index);
         RecoveryLogEntry entry = model.get(index);
         JPopupMenu menu = new JPopupMenu();
-        menu.add(menuItem("🌐 Показать в браузере", () -> actions.showInBrowser(entry.source())));
-        menu.add(menuItem("📁 Показать в Яндекс папке", () -> actions.showInYandexFolder(entry.source())));
-        menu.add(menuItem("📂 Показать в папке восстановления", () -> actions.showInRecoveryFolder(entry.recoveryFolder())));
+        menu.add(menuItem(UiIcon.BROWSER, "Показать в браузере", () -> actions.showInBrowser(entry.source())));
+        menu.add(menuItem(UiIcon.SOURCE_FOLDER, "Показать в Яндекс папке", () -> actions.showInYandexFolder(entry.source())));
+        menu.add(menuItem(UiIcon.RECOVERY_FOLDER, "Показать в папке восстановления", () ->
+                actions.showInRecoveryFolder(entry.recoveryFolder())));
         menu.show(this, event.getX(), event.getY());
     }
 
-    private JMenuItem menuItem(String text, Runnable action) {
+    private JMenuItem menuItem(UiIcon icon, String text, Runnable action) {
         JMenuItem item = new JMenuItem(text);
+        item.setIcon(UiIcons.icon(icon, 18));
+        item.setIconTextGap(6);
         item.addActionListener(event -> action.run());
         return item;
     }
@@ -221,6 +224,12 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
             text.setOpaque(false);
             text.setToolTipText(entry.isFileEntry() ? entry.source().toString() : null);
             cell.add(text, BorderLayout.CENTER);
+            UiIcon statusIcon = statusIconFor(entry.text());
+            if (statusIcon != null) {
+                javax.swing.JLabel icon = new javax.swing.JLabel(UiIcons.icon(statusIcon, 18));
+                icon.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 2));
+                cell.add(icon, BorderLayout.WEST);
+            }
             javax.swing.JLabel action = new javax.swing.JLabel(ACTION_ICON);
             action.setFont(list.getFont().deriveFont(Font.BOLD));
             action.setForeground(foreground);
@@ -229,5 +238,24 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
             cell.add(action, BorderLayout.EAST);
             return cell;
         }
+    }
+
+    private UiIcon statusIconFor(String text) {
+        if (text.startsWith("SRC_SAVED")) {
+            return UiIcon.FILE;
+        }
+        if (text.startsWith("WEBPV_SAVED")) {
+            return UiIcon.BROWSER;
+        }
+        if (text.startsWith("PREW_SAVED") || text.startsWith("MINIPV_SAVED")) {
+            return UiIcon.PREVIEW;
+        }
+        if (text.startsWith("PREVIEWS_CLEANED")) {
+            return UiIcon.CLEAN;
+        }
+        if (text.startsWith("ALREADY_OK")) {
+            return UiIcon.SUCCESS;
+        }
+        return text.startsWith("NO_FILE") ? UiIcon.ERROR : null;
     }
 }

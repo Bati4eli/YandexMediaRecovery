@@ -17,7 +17,7 @@ class RecoveryLogLineFormatterTest {
         RecoveryEvent event = new RecoveryEvent(1, 1, source, RecoveryOutcome.WEB_PREVIEW_SAVED,
                 "Превью сохранено: D:/backup/2005/Дача/WEBPV_IMG_0198.png");
 
-        assertEquals("🌐 WEBPV_SAVED — 2005\\Дача\\IMG_0198.jpg",
+        assertEquals("WEBPV_SAVED — 2005\\Дача\\IMG_0198.jpg",
                 RecoveryLogLineFormatter.format(event, sourceRoot));
     }
 
@@ -27,7 +27,7 @@ class RecoveryLogLineFormatterTest {
         Path source = Path.of("C:/other/IMG_0198.jpg").toAbsolutePath();
         RecoveryEvent event = new RecoveryEvent(1, 1, source, RecoveryOutcome.NO_FILE, "Ошибка");
 
-        assertEquals("❌ NO_FILE — " + source.normalize(), RecoveryLogLineFormatter.format(event, sourceRoot));
+        assertEquals("NO_FILE — " + source.normalize(), RecoveryLogLineFormatter.format(event, sourceRoot));
     }
 
     @Test

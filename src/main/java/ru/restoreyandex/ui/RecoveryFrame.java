@@ -103,17 +103,17 @@ public final class RecoveryFrame extends JFrame {
     });
     private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью");
     private final JCheckBox deleteLowerQualityPreviewsCheckBox = new JCheckBox("Удалять менее качественные превью");
-    private final JCheckBox browserDebugModeCheckBox = new JCheckBox("🐞 Отладка браузера (1 поток)");
+    private final JCheckBox browserDebugModeCheckBox = new JCheckBox("Отладка браузера (1 поток)");
     private final JComboBox<Integer> parallelismComboBox = new JComboBox<>(
             IntStream.rangeClosed(1, 10).boxed().toArray(Integer[]::new));
-    private final JButton yandexLoginButton = new JButton("🔐 Войти в Яндекс Диск…");
-    private final JButton yandexLogoutButton = new JButton("🚪 Выход из аккаунта");
+    private final JButton yandexLoginButton = new JButton("Войти в Яндекс Диск…");
+    private final JButton yandexLogoutButton = new JButton("Выход из аккаунта");
     private final JButton sourceBrowseButton = new JButton("Выбрать…");
     private final JButton destinationBrowseButton = new JButton("Выбрать…");
-    private final JButton cleanDestinationPreviewsButton = new JButton("🗑 Удалить превью…");
+    private final JButton cleanDestinationPreviewsButton = new JButton("Удалить превью…");
     private final JLabel yandexAccountLabel = new JLabel("Аккаунт Яндекс Диска: не авторизован");
-    private final JButton startButton = new JButton("▶️ Начать восстановление");
-    private final JButton stopButton = new JButton("⏹ Остановить восстановление");
+    private final JButton startButton = new JButton("Начать восстановление");
+    private final JButton stopButton = new JButton("Остановить восстановление");
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
     private final DestinationPreviewCleaner destinationPreviewCleaner = new DestinationPreviewCleaner();
@@ -123,7 +123,7 @@ public final class RecoveryFrame extends JFrame {
     private int logoutSpinnerFrame;
     private final Timer logoutSpinnerTimer = new Timer(120, event -> {
         yandexLogoutButton.setText(SPINNER_FRAMES[logoutSpinnerFrame++ % SPINNER_FRAMES.length]
-                + " 🚪 Выход из аккаунта");
+                + " Выход из аккаунта");
     });
 
     /** Создаёт окно и подставляет ранее сохранённые папки, если они есть. */
@@ -167,6 +167,7 @@ public final class RecoveryFrame extends JFrame {
         setLocationByPlatform(true);
         sourceField.setEditable(false);
         destinationField.setEditable(false);
+        applyColorIcons();
         progressBar.setStringPainted(true);
         progressBar.setString("Ожидание запуска");
 
@@ -176,7 +177,6 @@ public final class RecoveryFrame extends JFrame {
                 event -> chooseFolder(sourceField, "Выберите корень локального Яндекс Диска"));
         addFolderRow(folders, 1, "Корень резервной копии:", destinationField, destinationBrowseButton,
                 event -> chooseFolder(destinationField, "Выберите корень резервной копии"));
-        addPreviewCleanupButton(folders);
         JPanel options = new JPanel();
         options.setLayout(new javax.swing.BoxLayout(options, javax.swing.BoxLayout.Y_AXIS));
         overwritePreviewsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -184,7 +184,11 @@ public final class RecoveryFrame extends JFrame {
         browserDebugModeCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
         options.add(overwritePreviewsCheckBox);
         options.add(deleteLowerQualityPreviewsCheckBox);
-        options.add(browserDebugModeCheckBox);
+        JPanel browserDebugOption = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        browserDebugOption.add(new JLabel(UiIcons.icon(UiIcon.DEBUG, 18)));
+        browserDebugOption.add(browserDebugModeCheckBox);
+        browserDebugOption.setAlignmentX(Component.LEFT_ALIGNMENT);
+        options.add(browserDebugOption);
         JPanel parallelismOptions = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         parallelismOptions.add(new JLabel("Потоков: "));
         parallelismOptions.add(parallelismComboBox);
@@ -203,7 +207,7 @@ public final class RecoveryFrame extends JFrame {
         GridBagConstraints optionConstraints = new GridBagConstraints();
         optionConstraints.gridx = 0;
         optionConstraints.gridy = 2;
-        optionConstraints.gridwidth = 4;
+        optionConstraints.gridwidth = 3;
         optionConstraints.anchor = GridBagConstraints.WEST;
         optionConstraints.insets = new Insets(8, 0, 4, 6);
         folders.add(options, optionConstraints);
@@ -233,6 +237,7 @@ public final class RecoveryFrame extends JFrame {
         JPanel recoveryControl = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         recoveryControl.add(startButton);
         recoveryControl.add(stopButton);
+        recoveryControl.add(cleanDestinationPreviewsButton);
         JLabel repositoryLink = new JLabel("<html><a href=\"#\">GitHub: YandexMediaRecovery</a></html>");
         repositoryLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         repositoryLink.setToolTipText(PROJECT_REPOSITORY.toString());
@@ -254,6 +259,20 @@ public final class RecoveryFrame extends JFrame {
         pack();
     }
 
+    /** Назначает кнопкам PNG-иконки, чтобы цвет не зависел от emoji-шрифтов Windows. */
+    private void applyColorIcons() {
+        setButtonIcon(yandexLoginButton, UiIcon.LOGIN);
+        setButtonIcon(yandexLogoutButton, UiIcon.LOGOUT);
+        setButtonIcon(cleanDestinationPreviewsButton, UiIcon.DELETE);
+        setButtonIcon(startButton, UiIcon.START);
+        setButtonIcon(stopButton, UiIcon.STOP);
+    }
+
+    private void setButtonIcon(JButton button, UiIcon icon) {
+        button.setIcon(UiIcons.icon(icon, 20));
+        button.setIconTextGap(6);
+    }
+
     private void addFolderRow(JPanel panel, int row, String label, JTextField field, JButton browseButton,
                               java.awt.event.ActionListener browseAction) {
         GridBagConstraints constraints = new GridBagConstraints();
@@ -270,16 +289,6 @@ public final class RecoveryFrame extends JFrame {
         constraints.fill = GridBagConstraints.NONE;
         browseButton.addActionListener(browseAction);
         panel.add(browseButton, constraints);
-    }
-
-    /** Добавляет рядом с корнем резервной копии действие для удаления только созданных приложением превью. */
-    private void addPreviewCleanupButton(JPanel panel) {
-        GridBagConstraints constraints = new GridBagConstraints();
-        constraints.gridx = 3;
-        constraints.gridy = 1;
-        constraints.insets = new Insets(4, 0, 4, 0);
-        constraints.anchor = GridBagConstraints.WEST;
-        panel.add(cleanDestinationPreviewsButton, constraints);
     }
 
     private void chooseFolder(JTextField field, String title) {
@@ -326,8 +335,17 @@ public final class RecoveryFrame extends JFrame {
                     "Очистка превью", JOptionPane.WARNING_MESSAGE);
             return;
         }
+        List<Path> selectedDestinations = folderSelectionTree.selectedFolderRoots().stream()
+                .map(this::destinationFolderFor)
+                .filter(Files::isDirectory)
+                .toList();
+        if (selectedDestinations.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "В дереве не выбрано ни одной папки, которая существует в назначении.",
+                    "Очистка превью", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
         String warning = "Будут безвозвратно удалены только превью, созданные приложением,\n"
-                + "во всех подпапках:\n"
+                + "в выбранных ветках дерева и их подпапках:\n"
                 + "• PREW_*.png\n• WEBPV_*.jpg/png/webp/gif/bin\n• MINIPV_*.png\n\n"
                 + "Оригиналы, остальные файлы и каталоги не будут затронуты.\n\nПродолжить?";
         int answer = JOptionPane.showConfirmDialog(this, warning, "Удалить превью из папки назначения?",
@@ -339,8 +357,8 @@ public final class RecoveryFrame extends JFrame {
         startButton.setEnabled(false);
         sourceBrowseButton.setEnabled(false);
         destinationBrowseButton.setEnabled(false);
-        appendLog("🧹 Удаляю превью из папки назначения…\n");
-        new PreviewCleanupWorker(destination).execute();
+        appendLog("Удаляю превью из выбранных папок назначения…\n");
+        new PreviewCleanupWorker(selectedDestinations).execute();
     }
 
     /** Останавливает рабочие задачи и немедленно закрывает фоновый Chrome. */
@@ -349,7 +367,7 @@ public final class RecoveryFrame extends JFrame {
             return;
         }
         stopButton.setEnabled(false);
-        appendLog("⏹ Останавливаю восстановление и закрываю Chrome…\n");
+        appendLog("Останавливаю восстановление и закрываю Chrome…\n");
         recoveryService.cancel();
     }
 
@@ -506,7 +524,7 @@ public final class RecoveryFrame extends JFrame {
                     yandexAuthenticationConfirmed = true;
                     saveCurrentSettings();
                     showAuthenticatedYandexAccount();
-                    appendLog("✅ Вход в Яндекс Диск подтверждён. Chrome закрыт; браузерные превью готовы.\n");
+                    appendLog("Вход в Яндекс Диск подтверждён. Chrome закрыт; браузерные превью готовы.\n");
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                     ApplicationLogger.error("Ожидание открытия Chrome прервано", exception);
@@ -530,7 +548,7 @@ public final class RecoveryFrame extends JFrame {
         yandexLogoutButton.setEnabled(false);
         startButton.setEnabled(false);
         logoutSpinnerFrame = 0;
-        yandexLogoutButton.setText(SPINNER_FRAMES[logoutSpinnerFrame++] + " 🚪 Выход из аккаунта");
+        yandexLogoutButton.setText(SPINNER_FRAMES[logoutSpinnerFrame++] + " Выход из аккаунта");
         logoutSpinnerTimer.start();
         new SwingWorker<Void, Void>() {
             @Override
@@ -542,7 +560,7 @@ public final class RecoveryFrame extends JFrame {
             @Override
             protected void done() {
                 logoutSpinnerTimer.stop();
-                yandexLogoutButton.setText("🚪 Выход из аккаунта");
+                yandexLogoutButton.setText("Выход из аккаунта");
                 yandexLoginButton.setEnabled(true);
                 startButton.setEnabled(true);
                 try {
@@ -550,8 +568,9 @@ public final class RecoveryFrame extends JFrame {
                     yandexAuthenticationConfirmed = false;
                     saveCurrentSettings();
                     yandexAccountLabel.setText("Аккаунт Яндекс Диска: не авторизован");
+                    yandexAccountLabel.setIcon(null);
                     refreshYandexAccountControls();
-                    appendLog("✅ Выполнен выход из аккаунта Яндекс Диска.\n");
+                    appendLog("Выполнен выход из аккаунта Яндекс Диска.\n");
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
                     ApplicationLogger.error("Ожидание выхода из аккаунта прервано", exception);
@@ -641,13 +660,15 @@ public final class RecoveryFrame extends JFrame {
     /** Показывает email, сохранённый после ранее успешно подтверждённого входа. */
     private void showSavedYandexAccount() {
         if (yandexAuthenticationConfirmed) {
-            yandexAccountLabel.setText("✅ Авторизация в Яндекс Диске подтверждена (сохранено)");
+            yandexAccountLabel.setText("Авторизация в Яндекс Диске подтверждена (сохранено)");
+            yandexAccountLabel.setIcon(UiIcons.icon(UiIcon.SUCCESS, 18));
         }
     }
 
     /** Отображает подтверждённый текущий вход без чтения данных профиля пользователя. */
     private void showAuthenticatedYandexAccount() {
-        yandexAccountLabel.setText("✅ Авторизация в Яндекс Диске подтверждена");
+        yandexAccountLabel.setText("Авторизация в Яндекс Диске подтверждена");
+        yandexAccountLabel.setIcon(UiIcons.icon(UiIcon.SUCCESS, 18));
     }
 
     /** Показывает только действие, соответствующее сохранённому состоянию авторизации. */
@@ -730,7 +751,7 @@ public final class RecoveryFrame extends JFrame {
                 ApplicationLogger.error("Ожидание восстановления прервано", exception);
             } catch (CancellationException exception) {
                 restoreRecoveryControls();
-                appendLog("⏹ Восстановление остановлено пользователем.\n");
+                appendLog("Восстановление остановлено пользователем.\n");
             } catch (ExecutionException exception) {
                 restoreRecoveryControls();
                 String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
@@ -762,15 +783,15 @@ public final class RecoveryFrame extends JFrame {
 
     /** Выполняет удаление превью вне EDT и сообщает количество обработанных файлов. */
     private final class PreviewCleanupWorker extends SwingWorker<PreviewCleanupReport, Void> {
-        private final Path destination;
+        private final List<Path> destinations;
 
-        private PreviewCleanupWorker(Path destination) {
-            this.destination = destination;
+        private PreviewCleanupWorker(List<Path> destinations) {
+            this.destinations = List.copyOf(destinations);
         }
 
         @Override
         protected PreviewCleanupReport doInBackground() throws Exception {
-            return destinationPreviewCleaner.deletePreviews(destination);
+            return destinationPreviewCleaner.deletePreviews(destinations);
         }
 
         @Override
@@ -781,7 +802,7 @@ public final class RecoveryFrame extends JFrame {
             destinationBrowseButton.setEnabled(true);
             try {
                 PreviewCleanupReport report = get();
-                String message = "🧹 Удалено превью: " + report.deleted()
+                String message = "Удалено превью: " + report.deleted()
                         + "; ошибок: " + report.failed();
                 appendLog(message + "\n");
                 JOptionPane.showMessageDialog(RecoveryFrame.this, message, "Очистка превью",

@@ -15,10 +15,10 @@ class RecoveryLogViewTest {
         Path recoveryFolder = Path.of("D:/backup/2011/wedding");
 
         view.appendRunningFile("⏳ В работе [2 / 10] — 2011\\wedding\\Skes.mpg", source, recoveryFolder);
-        view.replaceRunningFile("💾 SRC_SAVED — 2011\\wedding\\Skes.mpg", source, recoveryFolder);
+        view.replaceRunningFile("SRC_SAVED — 2011\\wedding\\Skes.mpg", source, recoveryFolder);
 
         assertEquals(1, view.getModel().getSize());
-        assertEquals("💾 SRC_SAVED — 2011\\wedding\\Skes.mpg", view.getModel().getElementAt(0).text());
+        assertEquals("SRC_SAVED — 2011\\wedding\\Skes.mpg", view.getModel().getElementAt(0).text());
     }
 
     @Test
@@ -30,11 +30,11 @@ class RecoveryLogViewTest {
 
         view.appendRunningFile("⏳ В работе — one.jpg", first, recoveryFolder);
         view.appendRunningFile("⏳ В работе — two.jpg", second, recoveryFolder);
-        view.replaceRunningFile("💾 SRC_SAVED — two.jpg", second, recoveryFolder);
+        view.replaceRunningFile("SRC_SAVED — two.jpg", second, recoveryFolder);
 
         assertEquals(2, view.getModel().getSize());
         assertEquals("⏳ В работе — one.jpg", view.getModel().getElementAt(0).text());
-        assertEquals("💾 SRC_SAVED — two.jpg", view.getModel().getElementAt(1).text());
+        assertEquals("SRC_SAVED — two.jpg", view.getModel().getElementAt(1).text());
     }
 
     private RecoveryLogView.FileActions noopActions() {

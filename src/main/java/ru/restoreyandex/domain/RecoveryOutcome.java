@@ -23,16 +23,16 @@ public enum RecoveryOutcome {
         };
     }
 
-    /** Возвращает статус с эмодзи для начала строки экранного журнала. */
+    /** Возвращает текстовый статус для начала строки экранного журнала. */
     public String screenStatus() {
         return switch (this) {
-            case COPIED -> "💾 SRC_SAVED";
-            case WEB_PREVIEW_SAVED -> "🌐 WEBPV_SAVED";
-            case EXPLORER_PREVIEW_SAVED -> "🖼️ PREW_SAVED";
-            case MINI_PREVIEW_SAVED -> "🔎 MINIPV_SAVED";
-            case PREVIEWS_CLEANED -> "🧹 PREVIEWS_CLEANED";
-            case ALREADY_OK -> "✅ ALREADY_OK";
-            case NO_FILE -> "❌ NO_FILE";
+            case COPIED -> "SRC_SAVED";
+            case WEB_PREVIEW_SAVED -> "WEBPV_SAVED";
+            case EXPLORER_PREVIEW_SAVED -> "PREW_SAVED";
+            case MINI_PREVIEW_SAVED -> "MINIPV_SAVED";
+            case PREVIEWS_CLEANED -> "PREVIEWS_CLEANED";
+            case ALREADY_OK -> "ALREADY_OK";
+            case NO_FILE -> "NO_FILE";
         };
     }
 }

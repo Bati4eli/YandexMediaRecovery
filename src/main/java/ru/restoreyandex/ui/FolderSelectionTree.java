@@ -150,6 +150,19 @@ final class FolderSelectionTree extends JPanel {
         return selected.size() == 1 && selected.getFirst().equals(root.path) ? List.of() : List.copyOf(selected);
     }
 
+    /** Возвращает фактические выбранные корни для операций над содержимым папок. */
+    List<Path> selectedFolderRoots() {
+        if (rootFolder == null || !(model.getRoot() instanceof DirectoryNode root)) {
+            return List.of();
+        }
+        if (defaultAllSelected) {
+            return List.of(rootFolder);
+        }
+        List<Path> selected = new ArrayList<>();
+        collectSelectedRoots(root, selected);
+        return List.copyOf(selected);
+    }
+
     /** Преобразует текущее дерево в правила для запуска восстановления. */
     FolderSelection selection() {
         if (defaultAllSelected || rootFolder == null) {
@@ -307,16 +320,18 @@ final class FolderSelectionTree extends JPanel {
         }
         tree.setSelectionPath(treePath);
         JPopupMenu menu = new JPopupMenu();
-        menu.add(menuItem("🌐 Открыть в Яндекс Диске", () -> folderActions.showInYandexDisk(node.path)));
-        menu.add(menuItem("📁 Открыть в Проводнике", () -> folderActions.showInExplorer(node.path)));
+        menu.add(menuItem(UiIcon.BROWSER, "Открыть в Яндекс Диске", () -> folderActions.showInYandexDisk(node.path)));
+        menu.add(menuItem(UiIcon.SOURCE_FOLDER, "Открыть в Проводнике", () -> folderActions.showInExplorer(node.path)));
         folderActions.recoveryFolderFor(node.path).ifPresent(recoveryFolder ->
-                menu.add(menuItem("📂 Показать в папке восстановления", () ->
+                menu.add(menuItem(UiIcon.RECOVERY_FOLDER, "Показать в папке восстановления", () ->
                         folderActions.showInRecoveryFolder(recoveryFolder))));
         menu.show(tree, event.getX(), event.getY());
     }
 
-    private JMenuItem menuItem(String text, Runnable action) {
+    private JMenuItem menuItem(UiIcon icon, String text, Runnable action) {
         JMenuItem item = new JMenuItem(text);
+        item.setIcon(UiIcons.icon(icon, 18));
+        item.setIconTextGap(6);
         item.addActionListener(event -> action.run());
         return item;
     }

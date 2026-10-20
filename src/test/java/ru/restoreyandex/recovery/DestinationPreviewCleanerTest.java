@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -53,5 +54,21 @@ class DestinationPreviewCleanerTest {
         Path missingFolder = temporaryDirectory.resolve("missing");
 
         assertThrows(IOException.class, () -> new DestinationPreviewCleaner().deletePreviews(missingFolder));
+    }
+
+    @Test
+    void deletesPreviewsOnlyInsideSelectedDestinationBranches() throws Exception {
+        Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
+        Path selected = Files.createDirectories(destination.resolve("selected/nested"));
+        Path other = Files.createDirectories(destination.resolve("other"));
+        Path selectedPreview = Files.writeString(selected.resolve("PREW_photo.png"), "preview");
+        Path otherPreview = Files.writeString(other.resolve("PREW_photo.png"), "preview");
+
+        PreviewCleanupReport report = new DestinationPreviewCleaner().deletePreviews(List.of(selected.getParent(), selected));
+
+        assertEquals(1, report.deleted());
+        assertEquals(0, report.failed());
+        assertFalse(Files.exists(selectedPreview));
+        assertTrue(Files.exists(otherPreview));
     }
 }
