@@ -23,7 +23,7 @@ public final class DefaultMediaInspector implements MediaInspector {
     public MediaInspection inspect(Path file) {
         MediaType type = MediaExtensions.typeOf(file);
         if (!isLocallyAvailable(file)) {
-            return MediaInspection.unreadable(type);
+            return MediaInspection.unavailableOnDisk(type);
         }
         return MediaInspection.readable(type);
     }
@@ -57,12 +57,14 @@ public final class DefaultMediaInspector implements MediaInspector {
      * отсутствие OFFLINE не гарантирует, что Windows не начнёт загрузку файла.
      */
     static boolean hasLocalWindowsContent(int attributes) {
+        if ((attributes & (WinNT.FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)) != 0) {
+            return false;
+        }
         if ((attributes & WinNT.FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
             return true;
         }
         return (attributes & FILE_ATTRIBUTE_PINNED) != 0
-                && (attributes & WinNT.FILE_ATTRIBUTE_OFFLINE) == 0
-                && (attributes & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) == 0;
+                && (attributes & WinNT.FILE_ATTRIBUTE_OFFLINE) == 0;
     }
 
 }

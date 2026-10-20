@@ -4,6 +4,7 @@ import ru.restoreyandex.media.MediaInspector;
 import ru.restoreyandex.domain.MediaInspection;
 import ru.restoreyandex.domain.MediaType;
 import ru.restoreyandex.domain.RecoveryOptions;
+import ru.restoreyandex.domain.RecoveryOutcome;
 import ru.restoreyandex.domain.RecoveryReport;
 import ru.restoreyandex.domain.FolderSelection;
 import ru.restoreyandex.domain.FolderSelectionRule;
@@ -289,6 +290,39 @@ class RecoveryServiceTest {
         assertEquals(0, browserRequests.get());
         assertEquals(0, miniPreviewRequests.get());
         assertEquals(1, report.lostOriginals());
+    }
+
+    @Test
+    void skipsCloudPlaceholderImageWithoutOpeningItOrRequestingPreviews() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = temporaryDirectory.resolve("destination");
+        Files.writeString(source.resolve("ppp-VIKA.jpg"), "cloud placeholder");
+        AtomicInteger previewRequests = new AtomicInteger();
+        List<ru.restoreyandex.domain.RecoveryEvent> processed = new ArrayList<>();
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(),
+                ignored -> MediaInspection.unavailableOnDisk(MediaType.IMAGE),
+                ignored -> {
+                    previewRequests.incrementAndGet();
+                    return Optional.empty();
+                }, ignored -> {
+                    previewRequests.incrementAndGet();
+                    return Optional.empty();
+                }, ignored -> {
+                    previewRequests.incrementAndGet();
+                    return Optional.empty();
+                }, new SafeFileWriter());
+
+        RecoveryReport report = service.recover(source, destination, new RecoveryListener() {
+            @Override
+            public void onFileProcessed(ru.restoreyandex.domain.RecoveryEvent event) {
+                processed.add(event);
+            }
+        });
+
+        assertEquals(0, previewRequests.get());
+        assertEquals(1, report.lostOriginals());
+        assertEquals(RecoveryOutcome.NO_FILE, processed.getFirst().outcome());
+        assertTrue(processed.getFirst().message().contains("файл пропущен"));
     }
 
     @Test

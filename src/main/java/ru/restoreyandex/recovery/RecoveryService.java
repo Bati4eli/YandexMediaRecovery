@@ -522,12 +522,12 @@ public final class RecoveryService {
         return event(plan.source(), RecoveryOutcome.ALREADY_OK, "Пропуск: файл уже есть в папке назначения");
     }
 
-    /** Фиксирует отсутствие доступного оригинала для файла без пути восстановления-превью. */
+    /** Фиксирует недоступную облачную заглушку без её открытия или скачивания. */
     private RecoveryEvent unavailableOriginal(RecoveryPlan plan, Counter counter) {
         counter.lostOriginals.incrementAndGet();
         counter.previewsUnavailable.incrementAndGet();
         return event(plan.source(), RecoveryOutcome.NO_FILE,
-                "Оригинал недоступен; превью сохраняются только для фотографий");
+                "Оригинал недоступен на диске; файл пропущен");
     }
 
     private RecoveryEvent event(Path source, RecoveryOutcome outcome, String message) {

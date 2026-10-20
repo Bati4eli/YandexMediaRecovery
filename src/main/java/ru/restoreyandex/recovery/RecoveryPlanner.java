@@ -46,6 +46,9 @@ public final class RecoveryPlanner {
         }
 
         MediaInspection inspection = inspector.inspect(source);
+        if (inspection.unavailableOnDisk()) {
+            return new RecoveryPlan(source, originalTarget, RecoveryAction.NO_ORIGINAL_AVAILABLE, inspection.type());
+        }
         if (inspection.readable()) {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.COPY_ORIGINAL, inspection.type());
         }
