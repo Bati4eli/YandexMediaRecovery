@@ -8,9 +8,12 @@ import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTree;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.event.TreeExpansionEvent;
 import javax.swing.event.TreeWillExpandListener;
@@ -27,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Дерево выбора папок восстановления.
@@ -45,9 +49,35 @@ final class FolderSelectionTree extends JPanel {
     private boolean defaultAllSelected = true;
     private boolean selectionEditingEnabled = true;
     private Runnable selectionChangedListener = () -> { };
+    private final FolderActions folderActions;
 
     FolderSelectionTree() {
+        this(new FolderActions() {
+            @Override
+            public void showInYandexDisk(Path folder) {
+                // Дерево без окна-владельца используется только в модульных тестах.
+            }
+
+            @Override
+            public void showInExplorer(Path folder) {
+                // Дерево без окна-владельца используется только в модульных тестах.
+            }
+
+            @Override
+            public Optional<Path> recoveryFolderFor(Path sourceFolder) {
+                return Optional.empty();
+            }
+
+            @Override
+            public void showInRecoveryFolder(Path folder) {
+                // Дерево без окна-владельца используется только в модульных тестах.
+            }
+        });
+    }
+
+    FolderSelectionTree(FolderActions folderActions) {
         super(new BorderLayout(0, 4));
+        this.folderActions = Objects.requireNonNull(folderActions);
         setBorder(BorderFactory.createTitledBorder("Папки для восстановления"));
         tree.setRootVisible(true);
         tree.setShowsRootHandles(true);
@@ -68,6 +98,7 @@ final class FolderSelectionTree extends JPanel {
         });
         installLazyLoading();
         installSelectionToggle();
+        installContextMenu();
         selectAllButton.addActionListener(event -> {
             if (!selectionEditingEnabled || !(model.getRoot() instanceof DirectoryNode root)) {
                 return;
@@ -233,7 +264,7 @@ final class FolderSelectionTree extends JPanel {
         tree.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent event) {
-                if (!selectionEditingEnabled) {
+                if (!selectionEditingEnabled || !SwingUtilities.isLeftMouseButton(event)) {
                     return;
                 }
                 TreePath path = tree.getPathForLocation(event.getX(), event.getY());
@@ -249,6 +280,45 @@ final class FolderSelectionTree extends JPanel {
                 }
             }
         });
+    }
+
+    /** Устанавливает меню для открытия выбранного каталога в Проводнике или веб-клиенте Диска. */
+    private void installContextMenu() {
+        tree.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent event) {
+                showContextMenu(event);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent event) {
+                showContextMenu(event);
+            }
+        });
+    }
+
+    private void showContextMenu(MouseEvent event) {
+        if (!event.isPopupTrigger()) {
+            return;
+        }
+        TreePath treePath = tree.getPathForLocation(event.getX(), event.getY());
+        if (treePath == null || !(treePath.getLastPathComponent() instanceof DirectoryNode node) || node.path == null) {
+            return;
+        }
+        tree.setSelectionPath(treePath);
+        JPopupMenu menu = new JPopupMenu();
+        menu.add(menuItem("🌐 Открыть в Яндекс Диске", () -> folderActions.showInYandexDisk(node.path)));
+        menu.add(menuItem("📁 Открыть в Проводнике", () -> folderActions.showInExplorer(node.path)));
+        folderActions.recoveryFolderFor(node.path).ifPresent(recoveryFolder ->
+                menu.add(menuItem("📂 Показать в папке восстановления", () ->
+                        folderActions.showInRecoveryFolder(recoveryFolder))));
+        menu.show(tree, event.getX(), event.getY());
+    }
+
+    private JMenuItem menuItem(String text, Runnable action) {
+        JMenuItem item = new JMenuItem(text);
+        item.addActionListener(event -> action.run());
+        return item;
     }
 
     private void applySelection(DirectoryNode node, boolean selected) {
@@ -321,5 +391,16 @@ final class FolderSelectionTree extends JPanel {
                 add(new DefaultMutableTreeNode("Разверните папку"));
             }
         }
+    }
+
+    /** Действия с каталогом выполняет главное окно, чтобы ошибки попали в общий журнал. */
+    interface FolderActions {
+        void showInYandexDisk(Path folder);
+
+        void showInExplorer(Path folder);
+
+        Optional<Path> recoveryFolderFor(Path sourceFolder);
+
+        void showInRecoveryFolder(Path folder);
     }
 }

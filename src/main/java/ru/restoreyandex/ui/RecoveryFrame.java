@@ -9,6 +9,8 @@ import ru.restoreyandex.domain.RecoveryOptions;
 import ru.restoreyandex.domain.RecoveryReport;
 import ru.restoreyandex.logging.ApplicationLogger;
 import ru.restoreyandex.recovery.CsvRecoveryLogger;
+import ru.restoreyandex.recovery.DestinationPreviewCleaner;
+import ru.restoreyandex.recovery.PreviewCleanupReport;
 import ru.restoreyandex.recovery.RecoveryListener;
 import ru.restoreyandex.recovery.RecoveryService;
 import ru.restoreyandex.preview.YandexDiskUrlBuilder;
@@ -50,6 +52,7 @@ import java.nio.file.Path;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.IntStream;
 
 /** Главное окно для длительной операции восстановления. */
@@ -76,7 +79,28 @@ public final class RecoveryFrame extends JFrame {
             showInExplorer(folder, false);
         }
     });
-    private final FolderSelectionTree folderSelectionTree = new FolderSelectionTree();
+    private final FolderSelectionTree folderSelectionTree = new FolderSelectionTree(new FolderSelectionTree.FolderActions() {
+        @Override
+        public void showInYandexDisk(Path folder) {
+            openFolderInYandexDisk(folder);
+        }
+
+        @Override
+        public void showInExplorer(Path folder) {
+            RecoveryFrame.this.showInExplorer(folder, false);
+        }
+
+        @Override
+        public Optional<Path> recoveryFolderFor(Path sourceFolder) {
+            Path recoveryFolder = destinationFolderFor(sourceFolder);
+            return Files.isDirectory(recoveryFolder) ? Optional.of(recoveryFolder) : Optional.empty();
+        }
+
+        @Override
+        public void showInRecoveryFolder(Path folder) {
+            RecoveryFrame.this.showInExplorer(folder, false);
+        }
+    });
     private final JCheckBox overwritePreviewsCheckBox = new JCheckBox("Перезаписывать превью");
     private final JCheckBox deleteLowerQualityPreviewsCheckBox = new JCheckBox("Удалять менее качественные превью");
     private final JCheckBox browserDebugModeCheckBox = new JCheckBox("🐞 Отладка браузера (1 поток)");
@@ -86,11 +110,13 @@ public final class RecoveryFrame extends JFrame {
     private final JButton yandexLogoutButton = new JButton("🚪 Выход из аккаунта");
     private final JButton sourceBrowseButton = new JButton("Выбрать…");
     private final JButton destinationBrowseButton = new JButton("Выбрать…");
+    private final JButton cleanDestinationPreviewsButton = new JButton("🗑 Удалить превью…");
     private final JLabel yandexAccountLabel = new JLabel("Аккаунт Яндекс Диска: не авторизован");
     private final JButton startButton = new JButton("▶️ Начать восстановление");
     private final JButton stopButton = new JButton("⏹ Остановить восстановление");
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
+    private final DestinationPreviewCleaner destinationPreviewCleaner = new DestinationPreviewCleaner();
     private List<Path> savedSelectedFolders = List.of();
     private boolean yandexAuthenticationConfirmed;
     private RecoveryWorker activeRecoveryWorker;
@@ -150,6 +176,7 @@ public final class RecoveryFrame extends JFrame {
                 event -> chooseFolder(sourceField, "Выберите корень локального Яндекс Диска"));
         addFolderRow(folders, 1, "Корень резервной копии:", destinationField, destinationBrowseButton,
                 event -> chooseFolder(destinationField, "Выберите корень резервной копии"));
+        addPreviewCleanupButton(folders);
         JPanel options = new JPanel();
         options.setLayout(new javax.swing.BoxLayout(options, javax.swing.BoxLayout.Y_AXIS));
         overwritePreviewsCheckBox.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -176,7 +203,7 @@ public final class RecoveryFrame extends JFrame {
         GridBagConstraints optionConstraints = new GridBagConstraints();
         optionConstraints.gridx = 0;
         optionConstraints.gridy = 2;
-        optionConstraints.gridwidth = 3;
+        optionConstraints.gridwidth = 4;
         optionConstraints.anchor = GridBagConstraints.WEST;
         optionConstraints.insets = new Insets(8, 0, 4, 6);
         folders.add(options, optionConstraints);
@@ -190,6 +217,7 @@ public final class RecoveryFrame extends JFrame {
         yandexLoginButton.addActionListener(event -> openYandexLogin());
         yandexLogoutButton.addActionListener(event -> logoutYandexAccount());
         startButton.addActionListener(this::startRecovery);
+        cleanDestinationPreviewsButton.addActionListener(event -> cleanDestinationPreviews());
 
         JPanel top = new JPanel(new BorderLayout());
         top.add(folders, BorderLayout.CENTER);
@@ -244,6 +272,16 @@ public final class RecoveryFrame extends JFrame {
         panel.add(browseButton, constraints);
     }
 
+    /** Добавляет рядом с корнем резервной копии действие для удаления только созданных приложением превью. */
+    private void addPreviewCleanupButton(JPanel panel) {
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.gridx = 3;
+        constraints.gridy = 1;
+        constraints.insets = new Insets(4, 0, 4, 0);
+        constraints.anchor = GridBagConstraints.WEST;
+        panel.add(cleanDestinationPreviewsButton, constraints);
+    }
+
     private void chooseFolder(JTextField field, String title) {
         JFileChooser chooser = new JFileChooser(field.getText());
         chooser.setDialogTitle(title);
@@ -271,12 +309,38 @@ public final class RecoveryFrame extends JFrame {
         yandexLogoutButton.setEnabled(false);
         sourceBrowseButton.setEnabled(false);
         destinationBrowseButton.setEnabled(false);
+        cleanDestinationPreviewsButton.setEnabled(false);
         folderSelectionTree.setSelectionEditingEnabled(false);
         stopButton.setEnabled(true);
         replaceLog("Подготовка списка файлов…\n");
         progressBar.setIndeterminate(true);
         activeRecoveryWorker = new RecoveryWorker(source, destination, options);
         activeRecoveryWorker.execute();
+    }
+
+    /** Запрашивает подтверждение и запускает безопасную очистку превью в выбранной папке назначения. */
+    private void cleanDestinationPreviews() {
+        Path destination = Path.of(destinationField.getText());
+        if (!Files.isDirectory(destination)) {
+            JOptionPane.showMessageDialog(this, "Папка назначения недоступна:\n" + destination,
+                    "Очистка превью", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String warning = "Будут безвозвратно удалены только превью, созданные приложением,\n"
+                + "во всех подпапках:\n"
+                + "• PREW_*.png\n• WEBPV_*.jpg/png/webp/gif/bin\n• MINIPV_*.png\n\n"
+                + "Оригиналы, остальные файлы и каталоги не будут затронуты.\n\nПродолжить?";
+        int answer = JOptionPane.showConfirmDialog(this, warning, "Удалить превью из папки назначения?",
+                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.YES_OPTION) {
+            return;
+        }
+        cleanDestinationPreviewsButton.setEnabled(false);
+        startButton.setEnabled(false);
+        sourceBrowseButton.setEnabled(false);
+        destinationBrowseButton.setEnabled(false);
+        appendLog("🧹 Удаляю превью из папки назначения…\n");
+        new PreviewCleanupWorker(destination).execute();
     }
 
     /** Останавливает рабочие задачи и немедленно закрывает фоновый Chrome. */
@@ -298,13 +362,30 @@ public final class RecoveryFrame extends JFrame {
             reportSystemBrowserError(file, exception);
             return;
         }
+        openUriInSystemBrowser(viewerUri, file);
+    }
+
+    /** Открывает выбранный в дереве каталог в веб-клиенте Яндекс Диска. */
+    private void openFolderInYandexDisk(Path folder) {
+        URI folderUri;
+        try {
+            folderUri = YandexDiskUrlBuilder.folderUri(Path.of(sourceField.getText()), folder);
+        } catch (Exception exception) {
+            reportSystemBrowserError(folder, exception);
+            return;
+        }
+        openUriInSystemBrowser(folderUri, folder);
+    }
+
+    /** Открывает URL в браузере системы вне EDT. */
+    private void openUriInSystemBrowser(URI uri, Path target) {
         new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() throws Exception {
                 if (!Desktop.isDesktopSupported() || !Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
                     throw new UnsupportedOperationException("Системный браузер недоступен");
                 }
-                Desktop.getDesktop().browse(viewerUri);
+                Desktop.getDesktop().browse(uri);
                 return null;
             }
 
@@ -314,9 +395,9 @@ public final class RecoveryFrame extends JFrame {
                     get();
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
-                    reportSystemBrowserError(file, exception);
+                    reportSystemBrowserError(target, exception);
                 } catch (ExecutionException exception) {
-                    reportSystemBrowserError(file,
+                    reportSystemBrowserError(target,
                             exception.getCause() == null ? exception : exception.getCause());
                 }
             }
@@ -529,6 +610,17 @@ public final class RecoveryFrame extends JFrame {
         return parent == null ? destinationRoot : destinationRoot.resolve(parent);
     }
 
+    /** Возвращает папку назначения, соответствующую узлу дерева исходных каталогов. */
+    private Path destinationFolderFor(Path sourceFolder) {
+        Path sourceRoot = Path.of(sourceField.getText()).toAbsolutePath().normalize();
+        Path destinationRoot = Path.of(destinationField.getText()).toAbsolutePath().normalize();
+        Path normalizedSourceFolder = sourceFolder.toAbsolutePath().normalize();
+        if (!normalizedSourceFolder.startsWith(sourceRoot)) {
+            return destinationRoot;
+        }
+        return destinationRoot.resolve(sourceRoot.relativize(normalizedSourceFolder));
+    }
+
     private void saveCurrentSettings() {
         try {
             settingsRepository.save(new RecoverySettings(Path.of(sourceField.getText()), Path.of(destinationField.getText()),
@@ -655,6 +747,7 @@ public final class RecoveryFrame extends JFrame {
             yandexLogoutButton.setEnabled(yandexAuthenticationConfirmed);
             sourceBrowseButton.setEnabled(true);
             destinationBrowseButton.setEnabled(true);
+            cleanDestinationPreviewsButton.setEnabled(true);
             folderSelectionTree.setSelectionEditingEnabled(true);
             stopButton.setEnabled(false);
             activeRecoveryWorker = null;
@@ -664,6 +757,46 @@ public final class RecoveryFrame extends JFrame {
             appendLog("\n" + report.toDisplayString() + "\n");
             JOptionPane.showMessageDialog(RecoveryFrame.this, report.toDisplayString(), "Восстановление завершено",
                     JOptionPane.INFORMATION_MESSAGE);
+        }
+    }
+
+    /** Выполняет удаление превью вне EDT и сообщает количество обработанных файлов. */
+    private final class PreviewCleanupWorker extends SwingWorker<PreviewCleanupReport, Void> {
+        private final Path destination;
+
+        private PreviewCleanupWorker(Path destination) {
+            this.destination = destination;
+        }
+
+        @Override
+        protected PreviewCleanupReport doInBackground() throws Exception {
+            return destinationPreviewCleaner.deletePreviews(destination);
+        }
+
+        @Override
+        protected void done() {
+            cleanDestinationPreviewsButton.setEnabled(true);
+            startButton.setEnabled(true);
+            sourceBrowseButton.setEnabled(true);
+            destinationBrowseButton.setEnabled(true);
+            try {
+                PreviewCleanupReport report = get();
+                String message = "🧹 Удалено превью: " + report.deleted()
+                        + "; ошибок: " + report.failed();
+                appendLog(message + "\n");
+                JOptionPane.showMessageDialog(RecoveryFrame.this, message, "Очистка превью",
+                        JOptionPane.INFORMATION_MESSAGE);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                ApplicationLogger.error("Ожидание очистки превью прервано", exception);
+            } catch (ExecutionException exception) {
+                Throwable cause = exception.getCause() == null ? exception : exception.getCause();
+                ApplicationLogger.error("Не удалось очистить превью", cause);
+                String message = "Не удалось очистить превью: " + cause.getMessage();
+                appendLog(message + "\n");
+                JOptionPane.showMessageDialog(RecoveryFrame.this, message, "Очистка превью",
+                        JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
 

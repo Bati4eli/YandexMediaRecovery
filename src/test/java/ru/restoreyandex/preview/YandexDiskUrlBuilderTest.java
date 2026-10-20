@@ -30,6 +30,14 @@ class YandexDiskUrlBuilderTest {
     }
 
     @Test
+    void buildsFolderUrlForFolderInsideConfiguredYandexRoot() {
+        URI uri = YandexDiskUrlBuilder.folderUri(Path.of("C:/Users/user/Yandex.Disk"),
+                Path.of("C:/Users/user/Yandex.Disk/MEDIA/2005 дача"));
+
+        assertEquals("https://disk.yandex.ru/client/disk/MEDIA/2005%20%D0%B4%D0%B0%D1%87%D0%B0", uri.toASCIIString());
+    }
+
+    @Test
     void requestsLargestPreviewByReplacingOnlySizeParameter() {
         URI preview = URI.create("https://downloader.disk.yandex.ru/preview/token?filename=photo.jpg&size=974x1242&token=x");
 
