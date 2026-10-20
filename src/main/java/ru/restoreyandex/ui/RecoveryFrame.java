@@ -43,7 +43,6 @@ import java.awt.Font;
 import java.awt.Image;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URI;
 import java.nio.file.Files;
@@ -57,6 +56,7 @@ import java.util.stream.IntStream;
 public final class RecoveryFrame extends JFrame {
     private static final URI PROJECT_REPOSITORY = URI.create("https://github.com/Bati4eli/YandexMediaRecovery");
     private static final String[] SPINNER_FRAMES = {"◐", "◓", "◑", "◒"};
+    private static final int MAX_UI_UPDATES_PER_TURN = 64;
     private final JTextField sourceField = new JTextField();
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
@@ -488,30 +488,33 @@ public final class RecoveryFrame extends JFrame {
         }.execute();
     }
 
-    private void updateProgress(RecoveryEvent event, Path sourceRoot, Path destinationRoot) {
+    /** Применяет ограниченную пачку событий на EDT, чтобы не блокировать взаимодействие с окном. */
+    private void applyRecoveryUiUpdates(List<RecoveryUiUpdate> updates, Path sourceRoot, Path destinationRoot) {
+        RecoveryEvent latestCompleted = null;
+        for (RecoveryUiUpdate update : updates) {
+            if (update.isStarted()) {
+                logView.appendRunningFile(RecoveryLogLineFormatter.formatRunning(
+                        update.startedFile(), update.started(), update.totalFiles(), sourceRoot), update.startedFile(),
+                        recoveryFolderFor(update.startedFile(), sourceRoot, destinationRoot), false);
+                continue;
+            }
+            RecoveryEvent event = update.completedEvent();
+            logView.replaceRunningFile(RecoveryLogLineFormatter.format(event, sourceRoot), event.source(),
+                    recoveryFolderFor(event.source(), sourceRoot, destinationRoot), false);
+            latestCompleted = event;
+        }
+        if (latestCompleted != null) {
+            updateProgressBar(latestCompleted);
+        }
+        logView.scrollToEnd();
+    }
+
+    private void updateProgressBar(RecoveryEvent event) {
         progressBar.setIndeterminate(false);
         progressBar.setMaximum(Math.max(event.total(), 1));
         progressBar.setValue(event.processed());
         progressBar.setString(event.processed() + " / " + event.total());
-        Path recoveryFolder = recoveryFolderFor(event.source(), sourceRoot, destinationRoot);
-        String line = RecoveryLogLineFormatter.format(event, sourceRoot);
-        logView.replaceRunningFile(line, event.source(), recoveryFolder);
-        if (event.outcome() != ru.restoreyandex.domain.RecoveryOutcome.ALREADY_OK) {
-            ApplicationLogger.info(line);
-        }
-        progressBar.paintImmediately(progressBar.getVisibleRect());
-    }
-
-    /** Добавляет временную строку для файла, который уже взял рабочий поток. */
-    private void showRunningFileOnEdt(Path file, int started, int totalFiles, Path sourceRoot, Path destinationRoot) {
-        Runnable update = () -> logView.appendRunningFile(
-                RecoveryLogLineFormatter.formatRunning(file, started, totalFiles, sourceRoot), file,
-                recoveryFolderFor(file, sourceRoot, destinationRoot));
-        if (SwingUtilities.isEventDispatchThread()) {
-            update.run();
-        } else {
-            SwingUtilities.invokeLater(update);
-        }
+        progressBar.repaint();
     }
 
     /** Возвращает папку назначения, соответствующую исходной строке журнала. */
@@ -579,11 +582,14 @@ public final class RecoveryFrame extends JFrame {
         private final Path source;
         private final Path destination;
         private final RecoveryOptions options;
+        private final UiUpdatePump<RecoveryUiUpdate> uiUpdates;
 
         private RecoveryWorker(Path source, Path destination, RecoveryOptions options) {
             this.source = source;
             this.destination = destination;
             this.options = options;
+            uiUpdates = new UiUpdatePump<>(MAX_UI_UPDATES_PER_TURN, SwingUtilities::invokeLater,
+                    updates -> applyRecoveryUiUpdates(updates, source, destination));
         }
 
         @Override
@@ -603,13 +609,16 @@ public final class RecoveryFrame extends JFrame {
 
                     @Override
                     public void onFileStarted(Path file, int started, int totalFiles) {
-                        showRunningFileOnEdt(file, started, totalFiles, source, destination);
+                        uiUpdates.submit(RecoveryUiUpdate.started(file, started, totalFiles));
                     }
 
                     @Override
                     public void onFileProcessed(RecoveryEvent event) {
                         csvLogger.onFileProcessed(event);
-                        updateProgressOnEdt(event, source, destination);
+                        if (event.outcome() != ru.restoreyandex.domain.RecoveryOutcome.ALREADY_OK) {
+                            ApplicationLogger.info(RecoveryLogLineFormatter.format(event, source));
+                        }
+                        uiUpdates.submit(RecoveryUiUpdate.completed(event));
                     }
                 });
             }
@@ -617,6 +626,30 @@ public final class RecoveryFrame extends JFrame {
 
         @Override
         protected void done() {
+            try {
+                RecoveryReport report = get();
+                uiUpdates.runWhenDrained(() -> {
+                    restoreRecoveryControls();
+                    showRecoveryCompleted(report);
+                });
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                restoreRecoveryControls();
+                ApplicationLogger.error("Ожидание восстановления прервано", exception);
+            } catch (CancellationException exception) {
+                restoreRecoveryControls();
+                appendLog("⏹ Восстановление остановлено пользователем.\n");
+            } catch (ExecutionException exception) {
+                restoreRecoveryControls();
+                String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
+                ApplicationLogger.error("Восстановление остановлено", exception.getCause() == null ? exception : exception.getCause());
+                appendLog("\nОстановка: " + message + "\n");
+                JOptionPane.showMessageDialog(RecoveryFrame.this, "Операция не началась: " + message,
+                        "Ошибка", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+
+        private void restoreRecoveryControls() {
             startButton.setEnabled(true);
             yandexLoginButton.setEnabled(true);
             yandexLogoutButton.setEnabled(yandexAuthenticationConfirmed);
@@ -625,43 +658,27 @@ public final class RecoveryFrame extends JFrame {
             folderSelectionTree.setSelectionEditingEnabled(true);
             stopButton.setEnabled(false);
             activeRecoveryWorker = null;
-            try {
-                RecoveryReport report = get();
-                appendLog("\n" + report.toDisplayString() + "\n");
-                JOptionPane.showMessageDialog(RecoveryFrame.this, report.toDisplayString(), "Восстановление завершено",
-                        JOptionPane.INFORMATION_MESSAGE);
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                ApplicationLogger.error("Ожидание восстановления прервано", exception);
-            } catch (CancellationException exception) {
-                appendLog("⏹ Восстановление остановлено пользователем.\n");
-            } catch (ExecutionException exception) {
-                String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
-                ApplicationLogger.error("Восстановление остановлено", exception.getCause() == null ? exception : exception.getCause());
-                appendLog("\nОстановка: " + message + "\n");
-                JOptionPane.showMessageDialog(RecoveryFrame.this, "Операция не началась: " + message,
-                        "Ошибка", JOptionPane.ERROR_MESSAGE);
-            }
+        }
+
+        private void showRecoveryCompleted(RecoveryReport report) {
+            appendLog("\n" + report.toDisplayString() + "\n");
+            JOptionPane.showMessageDialog(RecoveryFrame.this, report.toDisplayString(), "Восстановление завершено",
+                    JOptionPane.INFORMATION_MESSAGE);
         }
     }
 
-    /**
-     * Подтверждает отрисовку каждого завершённого файла до перехода к
-     * следующему. Это не даёт очереди EDT скрыть прогресс при массовом
-     * пропуске уже восстановленных файлов.
-     */
-    private void updateProgressOnEdt(RecoveryEvent event, Path sourceRoot, Path destinationRoot) {
-        if (SwingUtilities.isEventDispatchThread()) {
-            updateProgress(event, sourceRoot, destinationRoot);
-            return;
+    /** Описывает один старт или финальный результат файла, ожидающий отображения в журнале. */
+    private record RecoveryUiUpdate(RecoveryEvent completedEvent, Path startedFile, int started, int totalFiles) {
+        private static RecoveryUiUpdate started(Path file, int started, int totalFiles) {
+            return new RecoveryUiUpdate(null, file, started, totalFiles);
         }
-        try {
-            SwingUtilities.invokeAndWait(() -> updateProgress(event, sourceRoot, destinationRoot));
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            ApplicationLogger.error("Поток восстановления прерван при обновлении прогресса", exception);
-        } catch (InvocationTargetException exception) {
-            ApplicationLogger.error("Не удалось обновить прогресс восстановления", exception.getCause());
+
+        private static RecoveryUiUpdate completed(RecoveryEvent event) {
+            return new RecoveryUiUpdate(event, null, 0, 0);
+        }
+
+        private boolean isStarted() {
+            return completedEvent == null;
         }
     }
 

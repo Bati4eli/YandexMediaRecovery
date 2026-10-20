@@ -293,22 +293,24 @@ class RecoveryServiceTest {
     }
 
     @Test
-    void skipsCloudPlaceholderImageWithoutOpeningItOrRequestingPreviews() throws Exception {
+    void restoresCloudPlaceholderImageFromBrowserPreviewWithoutCopyingOriginal() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("ppp-VIKA.jpg"), "cloud placeholder");
-        AtomicInteger previewRequests = new AtomicInteger();
+        AtomicInteger shellPreviewRequests = new AtomicInteger();
+        AtomicInteger browserPreviewRequests = new AtomicInteger();
+        AtomicInteger miniPreviewRequests = new AtomicInteger();
         List<ru.restoreyandex.domain.RecoveryEvent> processed = new ArrayList<>();
         RecoveryService service = new RecoveryService(new RecoveryPlanner(),
                 ignored -> MediaInspection.unavailableOnDisk(MediaType.IMAGE),
                 ignored -> {
-                    previewRequests.incrementAndGet();
+                    shellPreviewRequests.incrementAndGet();
                     return Optional.empty();
                 }, ignored -> {
-                    previewRequests.incrementAndGet();
-                    return Optional.empty();
+                    browserPreviewRequests.incrementAndGet();
+                    return Optional.of(browserPreview(Color.BLUE));
                 }, ignored -> {
-                    previewRequests.incrementAndGet();
+                    miniPreviewRequests.incrementAndGet();
                     return Optional.empty();
                 }, new SafeFileWriter());
 
@@ -319,10 +321,13 @@ class RecoveryServiceTest {
             }
         });
 
-        assertEquals(0, previewRequests.get());
+        assertEquals(1, shellPreviewRequests.get());
+        assertEquals(1, browserPreviewRequests.get());
+        assertEquals(0, miniPreviewRequests.get());
         assertEquals(1, report.lostOriginals());
-        assertEquals(RecoveryOutcome.NO_FILE, processed.getFirst().outcome());
-        assertTrue(processed.getFirst().message().contains("файл пропущен"));
+        assertEquals(RecoveryOutcome.WEB_PREVIEW_SAVED, processed.getFirst().outcome());
+        assertFalse(Files.exists(destination.resolve("ppp-VIKA.jpg")));
+        assertNotNull(ImageIO.read(destination.resolve("WEBPV_ppp-VIKA.png").toFile()));
     }
 
     @Test

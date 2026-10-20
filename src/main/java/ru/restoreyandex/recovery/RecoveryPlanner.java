@@ -46,7 +46,9 @@ public final class RecoveryPlanner {
         }
 
         MediaInspection inspection = inspector.inspect(source);
-        if (inspection.unavailableOnDisk()) {
+        // Облачную заглушку нельзя копировать. Для фото сохраняется безопасная
+        // цепочка восстановления превью, для остальных типов — финальный NO_FILE.
+        if (inspection.unavailableOnDisk() && inspection.type() != MediaType.IMAGE) {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.NO_ORIGINAL_AVAILABLE, inspection.type());
         }
         if (inspection.readable()) {

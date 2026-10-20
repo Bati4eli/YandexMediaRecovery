@@ -60,6 +60,11 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
 
     /** Добавляет строку файла, который начал обрабатываться, и запоминает её для итоговой замены. */
     void appendRunningFile(String text, Path source, Path recoveryFolder) {
+        appendRunningFile(text, source, recoveryFolder, true);
+    }
+
+    /** Добавляет строку текущего файла; пакетный UI сам выполняет прокрутку в конце пачки. */
+    void appendRunningFile(String text, Path source, Path recoveryFolder, boolean scrollToEnd) {
         Path key = normalized(source);
         Integer existingIndex = runningFileIndexes.get(key);
         RecoveryLogEntry entry = new RecoveryLogEntry(text, source, recoveryFolder);
@@ -71,22 +76,33 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
             model.addElement(entry);
             runningFileIndexes.put(key, index);
         }
-        scrollToEnd();
+        if (scrollToEnd) {
+            scrollToEnd();
+        }
     }
 
     /** Заменяет строку текущего файла итоговым статусом, не добавляя дубль в журнал. */
     void replaceRunningFile(String text, Path source, Path recoveryFolder) {
+        replaceRunningFile(text, source, recoveryFolder, true);
+    }
+
+    /** Заменяет строку текущего файла; пакетный UI сам выполняет прокрутку в конце пачки. */
+    void replaceRunningFile(String text, Path source, Path recoveryFolder, boolean scrollToEnd) {
         Path key = normalized(source);
         Integer index = runningFileIndexes.remove(key);
         RecoveryLogEntry entry = new RecoveryLogEntry(text, source, recoveryFolder);
         if (index == null) {
             model.addElement(entry);
-            scrollToEnd();
+            if (scrollToEnd) {
+                scrollToEnd();
+            }
             return;
         }
         model.set(index, entry);
         repaint(getCellBounds(index, index));
-        ensureIndexIsVisible(index);
+        if (scrollToEnd) {
+            ensureIndexIsVisible(index);
+        }
     }
 
     /** Очищает журнал и показывает начальное сообщение. */

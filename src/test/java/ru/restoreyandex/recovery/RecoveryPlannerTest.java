@@ -58,7 +58,7 @@ class RecoveryPlannerTest {
     }
 
     @Test
-    void cloudPlaceholderIsSkippedAndMarkedUnavailableInsteadOfStartingPreviewRecovery() throws Exception {
+    void cloudPlaceholderImageEntersPreviewRecoveryWithoutCopyingOriginal() throws Exception {
         Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));
         Path source = Files.writeString(sourceRoot.resolve("ppp-VIKA.jpg"), "cloud placeholder");
@@ -66,7 +66,7 @@ class RecoveryPlannerTest {
         RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot,
                 ignored -> MediaInspection.unavailableOnDisk(MediaType.IMAGE));
 
-        assertEquals(RecoveryAction.NO_ORIGINAL_AVAILABLE, plan.action());
+        assertEquals(RecoveryAction.WRITE_PREVIEW, plan.action());
         assertEquals(destinationRoot.resolve("ppp-VIKA.jpg"), plan.destination());
     }
 
