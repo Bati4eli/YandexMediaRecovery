@@ -41,10 +41,6 @@ public final class RecoveryPlanner {
         }
         Path originalTarget = destinationRoot.resolve(relativePath);
         MediaType hintedType = MediaExtensions.typeOf(source);
-        if (hintedType == MediaType.UNSUPPORTED) {
-            return new RecoveryPlan(source, originalTarget, RecoveryAction.SKIP_UNSUPPORTED, hintedType);
-        }
-
         if (Files.exists(originalTarget)) {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.SKIP_DESTINATION_EXISTS, hintedType);
         }
@@ -53,6 +49,9 @@ public final class RecoveryPlanner {
         if (inspection.readable()) {
             return new RecoveryPlan(source, originalTarget, RecoveryAction.COPY_ORIGINAL, inspection.type());
         }
-        return new RecoveryPlan(source, originalTarget, RecoveryAction.WRITE_PREVIEW, inspection.type());
+        if (inspection.type() == MediaType.IMAGE) {
+            return new RecoveryPlan(source, originalTarget, RecoveryAction.WRITE_PREVIEW, inspection.type());
+        }
+        return new RecoveryPlan(source, originalTarget, RecoveryAction.NO_ORIGINAL_AVAILABLE, inspection.type());
     }
 }

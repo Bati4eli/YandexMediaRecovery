@@ -1,6 +1,5 @@
 package ru.restoreyandex.recovery;
 
-import ru.restoreyandex.media.DefaultMediaInspector;
 import ru.restoreyandex.media.MediaInspector;
 import ru.restoreyandex.domain.MediaInspection;
 import ru.restoreyandex.domain.MediaType;
@@ -51,6 +50,19 @@ class RecoveryServiceTest {
 
         assertEquals(1, report.copied());
         assertNotNull(ImageIO.read(destination.resolve("album/photo.png").toFile()));
+    }
+
+    @Test
+    void copiesLocallyAvailableFileRegardlessOfExtension() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source/album"));
+        Path destination = temporaryDirectory.resolve("destination");
+        byte[] original = {1, 2, 3, 4, 5};
+        Files.write(source.resolve("wedding-archive.zip"), original);
+
+        RecoveryReport report = serviceWithNoPreview().recover(source.getParent(), destination, new RecoveryListener() { });
+
+        assertEquals(1, report.copied());
+        assertArrayEquals(original, Files.readAllBytes(destination.resolve("album/wedding-archive.zip")));
     }
 
     @Test
@@ -146,7 +158,7 @@ class RecoveryServiceTest {
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
         BufferedImage preview = new BufferedImage(3, 2, BufferedImage.TYPE_INT_RGB);
         preview.setRGB(0, 0, Color.GREEN.getRGB());
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.of(preview), new SafeFileWriter());
 
         RecoveryReport report = service.recover(source.getParent(), destination, new RecoveryListener() { });
@@ -165,7 +177,7 @@ class RecoveryServiceTest {
             assertEquals(Path.of("2011/lost.jpg"), relativePath);
             return Optional.of(browserPreview(Color.BLUE));
         };
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.of(shellPreview), cloud, new SafeFileWriter());
 
         service.recover(source.getParent(), destination, new RecoveryListener() { });
@@ -178,7 +190,7 @@ class RecoveryServiceTest {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source/2011"));
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), ignored -> Optional.of(browserPreview(Color.BLUE)), new SafeFileWriter());
 
         service.recover(source.getParent(), destination, new RecoveryListener() { });
@@ -192,7 +204,7 @@ class RecoveryServiceTest {
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
         byte[] resourceBytes = {10, 20, 30, 40, 50};
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), ignored -> Optional.of(new BrowserPreview(resourceBytes, "jpg")),
                 new SafeFileWriter());
 
@@ -213,7 +225,7 @@ class RecoveryServiceTest {
             browserRequests.incrementAndGet();
             return Optional.of(browserPreview(Color.BLUE));
         };
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), cloud, new SafeFileWriter());
 
         service.recover(source, destination, new RecoveryListener() { });
@@ -229,7 +241,7 @@ class RecoveryServiceTest {
         Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
         writeSizedImage(destination.resolve("PREW_lost.png"), 160, 120, Color.RED);
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), ignored -> Optional.empty(),
                 ignored -> Optional.of(image(Color.MAGENTA)), new SafeFileWriter());
 
@@ -244,7 +256,7 @@ class RecoveryServiceTest {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), ignored -> Optional.empty(),
                 ignored -> Optional.of(image(Color.MAGENTA)), new SafeFileWriter());
 
@@ -255,7 +267,7 @@ class RecoveryServiceTest {
     }
 
     @Test
-    void doesNotRequestBrowserPreviewForVideoFiles() throws Exception {
+    void doesNotCreatePreviewForUnavailableVideoFiles() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("movie.mp4"), "unavailable video");
@@ -272,10 +284,11 @@ class RecoveryServiceTest {
                     return Optional.empty();
                 }, new SafeFileWriter());
 
-        service.recover(source, destination, new RecoveryListener() { });
+        RecoveryReport report = service.recover(source, destination, new RecoveryListener() { });
 
         assertEquals(0, browserRequests.get());
-        assertEquals(1, miniPreviewRequests.get());
+        assertEquals(0, miniPreviewRequests.get());
+        assertEquals(1, report.lostOriginals());
     }
 
     @Test
@@ -283,7 +296,7 @@ class RecoveryServiceTest {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = temporaryDirectory.resolve("destination");
         Files.writeString(source.resolve("lost.jpg"), "cloud placeholder");
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), ignored -> Optional.empty(),
                 ignored -> Optional.empty(), new SafeFileWriter());
 
@@ -294,7 +307,7 @@ class RecoveryServiceTest {
     }
 
     @Test
-    void doesNotCountUnsupportedFileAsLostOriginal() throws Exception {
+    void copiesLocallyAvailableFileWithUnknownExtension() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Files.writeString(source.resolve("note.txt"), "not media");
 
@@ -302,6 +315,36 @@ class RecoveryServiceTest {
                 new RecoveryListener() { });
 
         assertEquals(0, report.lostOriginals());
+        assertEquals(1, report.copied());
+    }
+
+    @Test
+    void doesNotCreatePreviewForUnavailableFileWithUnknownExtension() throws Exception {
+        Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
+        Path destination = temporaryDirectory.resolve("destination");
+        Files.writeString(source.resolve("wedding-archive.zip"), "cloud placeholder");
+        AtomicInteger largePreviewRequests = new AtomicInteger();
+        AtomicInteger browserPreviewRequests = new AtomicInteger();
+        AtomicInteger miniPreviewRequests = new AtomicInteger();
+        MediaInspector unavailableArchive = ignored -> MediaInspection.unreadable(MediaType.UNSUPPORTED);
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableArchive,
+                ignored -> {
+                    largePreviewRequests.incrementAndGet();
+                    return Optional.empty();
+                }, ignored -> {
+                    browserPreviewRequests.incrementAndGet();
+                    return Optional.empty();
+                }, ignored -> {
+                    miniPreviewRequests.incrementAndGet();
+                    return Optional.empty();
+                }, new SafeFileWriter());
+
+        RecoveryReport report = service.recover(source, destination, new RecoveryListener() { });
+
+        assertEquals(0, largePreviewRequests.get());
+        assertEquals(0, browserPreviewRequests.get());
+        assertEquals(0, miniPreviewRequests.get());
+        assertEquals(1, report.lostOriginals());
     }
 
     @Test
@@ -324,7 +367,7 @@ class RecoveryServiceTest {
         writeImage(destination.resolve("MINIPV_lost.png"), Color.MAGENTA);
         AtomicInteger largeRequests = new AtomicInteger();
         AtomicInteger browserRequests = new AtomicInteger();
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> {
                     largeRequests.incrementAndGet();
                     return Optional.of(image(Color.GREEN));
@@ -381,7 +424,7 @@ class RecoveryServiceTest {
             browserRequests.incrementAndGet();
             return Optional.of(browserPreview(Color.BLUE));
         };
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), cloud, new SafeFileWriter());
 
         service.recover(source, destination, new RecoveryListener() { });
@@ -402,7 +445,7 @@ class RecoveryServiceTest {
             browserRequests.incrementAndGet();
             return Optional.of(browserPreview(Color.BLUE));
         };
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), cloud, new SafeFileWriter());
 
         service.recover(source, destination, new RecoveryListener() { });
@@ -419,7 +462,7 @@ class RecoveryServiceTest {
         writeImage(destination.resolve("PREW_lost.png"), Color.RED);
         BufferedImage preview = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
         preview.setRGB(0, 0, Color.GREEN.getRGB());
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.of(preview), new SafeFileWriter());
 
         RecoveryReport report = service.recover(source, destination, new RecoveryOptions(true, 1), new RecoveryListener() { });
@@ -518,7 +561,7 @@ class RecoveryServiceTest {
                 browserClosed.set(true);
             }
         };
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), browser, ignored -> Optional.empty(), new SafeFileWriter());
 
         service.cancel();
@@ -540,7 +583,7 @@ class RecoveryServiceTest {
                 loggedOut.set(true);
             }
         };
-        RecoveryService service = new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        RecoveryService service = new RecoveryService(new RecoveryPlanner(), unavailableImage(),
                 ignored -> Optional.empty(), browser, ignored -> Optional.empty(), new SafeFileWriter());
 
         service.logoutYandexDisk();
@@ -549,8 +592,12 @@ class RecoveryServiceTest {
     }
 
     private RecoveryService serviceWithNoPreview() {
-        return new RecoveryService(new RecoveryPlanner(), new DefaultMediaInspector(),
+        return new RecoveryService(new RecoveryPlanner(), new ru.restoreyandex.media.DefaultMediaInspector(),
                 ignored -> Optional.empty(), new SafeFileWriter());
+    }
+
+    private MediaInspector unavailableImage() {
+        return ignored -> MediaInspection.unreadable(MediaType.IMAGE);
     }
 
     private RecoveryService serviceWith(MediaInspector inspector) {

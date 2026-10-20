@@ -185,7 +185,7 @@ public final class RecoveryService {
                 case COPY_ORIGINAL -> copy(plan, options.deleteLowerQualityPreviews(), counter);
                 case WRITE_PREVIEW -> writePreview(plan, sourceRoot, options, counter);
                 case SKIP_DESTINATION_EXISTS -> skipped(plan, counter);
-                case SKIP_UNSUPPORTED -> skipped(plan, counter);
+                case NO_ORIGINAL_AVAILABLE -> unavailableOriginal(plan, counter);
             };
         } catch (Exception exception) {
             ApplicationLogger.error("Ошибка восстановления файла: " + source, exception);
@@ -519,12 +519,15 @@ public final class RecoveryService {
 
     private RecoveryEvent skipped(RecoveryPlan plan, Counter counter) {
         counter.skipped.incrementAndGet();
-        String message = plan.action() == RecoveryAction.SKIP_DESTINATION_EXISTS
-                ? "Пропуск: файл уже есть в папке назначения"
-                : "Пропуск: не фото и не видео";
-        RecoveryOutcome outcome = plan.action() == RecoveryAction.SKIP_DESTINATION_EXISTS
-                ? RecoveryOutcome.ALREADY_OK : RecoveryOutcome.NO_FILE;
-        return event(plan.source(), outcome, message);
+        return event(plan.source(), RecoveryOutcome.ALREADY_OK, "Пропуск: файл уже есть в папке назначения");
+    }
+
+    /** Фиксирует отсутствие доступного оригинала для файла без пути восстановления-превью. */
+    private RecoveryEvent unavailableOriginal(RecoveryPlan plan, Counter counter) {
+        counter.lostOriginals.incrementAndGet();
+        counter.previewsUnavailable.incrementAndGet();
+        return event(plan.source(), RecoveryOutcome.NO_FILE,
+                "Оригинал недоступен; превью сохраняются только для фотографий");
     }
 
     private RecoveryEvent event(Path source, RecoveryOutcome outcome, String message) {

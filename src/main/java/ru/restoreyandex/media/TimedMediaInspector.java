@@ -58,14 +58,13 @@ public final class TimedMediaInspector implements MediaInspector, AutoCloseable 
 
     /**
      * Выполняет проверку с ограничением времени. При таймауте или ошибке
-     * возвращает «недоступен» с типом, определённым по расширению.
+     * возвращает «недоступен» с типом, определённым по расширению. Проверка
+     * всегда передаётся делегату: локальный оригинал копируется независимо от
+     * расширения.
      */
     @Override
     public MediaInspection inspect(Path file) {
         MediaType mediaType = MediaExtensions.typeOf(file);
-        if (mediaType == MediaType.UNSUPPORTED) {
-            return MediaInspection.unsupported();
-        }
         Future<MediaInspection> task;
         try {
             task = executor.submit(() -> delegate.inspect(file));

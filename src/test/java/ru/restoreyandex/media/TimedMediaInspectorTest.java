@@ -12,6 +12,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
@@ -73,6 +74,25 @@ class TimedMediaInspectorTest {
         } finally {
             allowFirstInspectionToFinish.countDown();
             callers.shutdownNow();
+            inspector.close();
+        }
+    }
+
+    @Test
+    void delegatesLocallyAvailableFileWithUnknownExtension() throws Exception {
+        Path archive = Files.writeString(temporaryDirectory.resolve("wedding-archive.zip"), "local original");
+        AtomicBoolean delegated = new AtomicBoolean();
+        TimedMediaInspector inspector = new TimedMediaInspector(file -> {
+            delegated.set(file.equals(archive));
+            return MediaInspection.readable(MediaType.UNSUPPORTED);
+        }, Duration.ofSeconds(1), 1);
+
+        try {
+            MediaInspection result = inspector.inspect(archive);
+
+            assertTrue(delegated.get());
+            assertTrue(result.readable());
+        } finally {
             inspector.close();
         }
     }

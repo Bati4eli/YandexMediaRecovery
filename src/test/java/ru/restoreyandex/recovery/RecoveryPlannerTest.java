@@ -107,14 +107,15 @@ class RecoveryPlannerTest {
     }
 
     @Test
-    void unrelatedFilesAreIgnored() throws Exception {
+    void locallyAvailableFileIsCopiedRegardlessOfExtension() throws Exception {
         Path sourceRoot = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destinationRoot = Files.createDirectories(temporaryDirectory.resolve("destination"));
-        Path source = Files.writeString(sourceRoot.resolve("notes.txt"), "not media");
+        Path source = Files.writeString(sourceRoot.resolve("wedding-archive.zip"), "local original");
 
-        RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot, unreadableImage());
+        RecoveryPlan plan = planner.plan(source, sourceRoot, destinationRoot,
+                ignored -> MediaInspection.readable(MediaType.UNSUPPORTED));
 
-        assertEquals(RecoveryAction.SKIP_UNSUPPORTED, plan.action());
+        assertEquals(RecoveryAction.COPY_ORIGINAL, plan.action());
     }
 
     private MediaInspector readableImage() {

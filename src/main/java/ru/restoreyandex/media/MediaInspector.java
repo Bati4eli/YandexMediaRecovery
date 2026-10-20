@@ -4,12 +4,11 @@ import ru.restoreyandex.domain.MediaInspection;
 
 import java.nio.file.Path;
 
-/** Проверяет, можно ли открыть медиафайл без его изменения. */
+/** Проверяет, доступен ли исходный файл локально без его изменения. */
 @FunctionalInterface
 public interface MediaInspector {
     /**
-     * Проверяет файл. Реализация должна превращать ошибки разбора в результат
-     * «недоступен», а не изменять и не удалять файл.
+     * Проверяет файл. Реализация не должна изменять или удалять исходный файл.
      */
     MediaInspection inspect(Path file);
 }

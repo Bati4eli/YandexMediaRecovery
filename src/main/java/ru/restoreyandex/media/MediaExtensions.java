@@ -9,7 +9,7 @@ import java.util.Set;
 /** Классифицирует медиа по имени файла перед безопасной попыткой декодирования. */
 public final class MediaExtensions {
     private static final Set<String> IMAGE_EXTENSIONS = Set.of(
-            "jpg", "jpeg", "png", "gif", "bmp", "wbmp", "tif", "tiff");
+            "jpg", "jpeg", "png", "gif", "bmp", "wbmp", "tif", "tiff", "webp", "heic", "heif");
     private static final Set<String> VIDEO_EXTENSIONS = Set.of(
             "mp4", "m4v", "mov", "avi", "mkv", "3gp", "webm");
 
