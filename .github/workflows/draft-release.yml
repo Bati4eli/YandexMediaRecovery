@@ -180,8 +180,6 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "# Yandex Media Recovery ${NEW_TAG}"
-            echo
             echo "> Диапазон: \`${PREVIOUS_LABEL}...${NEW_TAG}\`"
             echo "> Коммитов: ${COMMIT_COUNT}"
             if [ "${PREVIOUS_LABEL}" != "начало истории" ]; then
