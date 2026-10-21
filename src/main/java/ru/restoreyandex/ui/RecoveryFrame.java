@@ -49,6 +49,7 @@ import java.net.URL;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.List;
@@ -115,6 +116,8 @@ public final class RecoveryFrame extends JFrame {
     private final JLabel yandexAccountLabel = new JLabel("Аккаунт Яндекс Диска: не авторизован");
     private final JButton startButton = new JButton("Начать восстановление");
     private final JButton stopButton = new JButton("Остановить восстановление");
+    private final JLabel elapsedTimeLabel = new JLabel(ElapsedTimeFormatter.format(Duration.ZERO));
+    private final Timer recoveryElapsedTimer = new Timer(1_000, event -> updateElapsedTimeLabel());
     private final PropertiesSettingsRepository settingsRepository = new PropertiesSettingsRepository();
     private final RecoveryService recoveryService = new RecoveryService();
     private final DestinationPreviewCleaner destinationPreviewCleaner = new DestinationPreviewCleaner();
@@ -122,6 +125,7 @@ public final class RecoveryFrame extends JFrame {
     private boolean yandexAuthenticationConfirmed;
     private RecoveryWorker activeRecoveryWorker;
     private int logoutSpinnerFrame;
+    private long recoveryStartedAtNanos;
     private final Timer logoutSpinnerTimer = new Timer(120, event -> {
         yandexLogoutButton.setText(SPINNER_FRAMES[logoutSpinnerFrame++ % SPINNER_FRAMES.length]
                 + " Выход из аккаунта");
@@ -239,6 +243,9 @@ public final class RecoveryFrame extends JFrame {
         recoveryControl.add(startButton);
         recoveryControl.add(stopButton);
         recoveryControl.add(cleanDestinationPreviewsButton);
+        elapsedTimeLabel.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
+        elapsedTimeLabel.setToolTipText("Время выполнения восстановления");
+        recoveryControl.add(elapsedTimeLabel);
         JLabel repositoryLink = new JLabel("<html><a href=\"#\">GitHub: YandexMediaRecovery</a></html>");
         repositoryLink.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         repositoryLink.setToolTipText(PROJECT_REPOSITORY.toString());
@@ -324,8 +331,29 @@ public final class RecoveryFrame extends JFrame {
         stopButton.setEnabled(true);
         replaceLog("Подготовка списка файлов…\n");
         progressBar.setIndeterminate(true);
+        startElapsedTimeCounter();
         activeRecoveryWorker = new RecoveryWorker(source, destination, options);
         activeRecoveryWorker.execute();
+    }
+
+    /** Запускает отображение длительности текущего восстановления на EDT. */
+    private void startElapsedTimeCounter() {
+        recoveryStartedAtNanos = System.nanoTime();
+        updateElapsedTimeLabel();
+        recoveryElapsedTimer.start();
+    }
+
+    /** Останавливает счётчик и возвращает его итоговое отображаемое значение. */
+    private String stopElapsedTimeCounter() {
+        updateElapsedTimeLabel();
+        recoveryElapsedTimer.stop();
+        return elapsedTimeLabel.getText();
+    }
+
+    /** Обновляет видимое значение без обращения к фоновому потоку восстановления. */
+    private void updateElapsedTimeLabel() {
+        long elapsedNanos = recoveryStartedAtNanos == 0 ? 0 : Math.max(0, System.nanoTime() - recoveryStartedAtNanos);
+        elapsedTimeLabel.setText(ElapsedTimeFormatter.format(Duration.ofNanos(elapsedNanos)));
     }
 
     /** Запрашивает подтверждение и запускает безопасную очистку превью в выбранной папке назначения. */
@@ -739,23 +767,28 @@ public final class RecoveryFrame extends JFrame {
         protected void done() {
             try {
                 RecoveryReport report = get();
+                String elapsedTime = stopElapsedTimeCounter();
                 uiUpdates.runWhenDrained(() -> {
                     restoreRecoveryControls();
-                    showRecoveryCompleted(report);
+                    showRecoveryCompleted(report, elapsedTime);
                 });
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
+                stopElapsedTimeCounter();
                 restoreRecoveryControls();
                 ApplicationLogger.error("Ожидание восстановления прервано", exception);
             } catch (CancellationException exception) {
+                String elapsedTime = stopElapsedTimeCounter();
                 restoreRecoveryControls();
-                appendLog("Восстановление остановлено пользователем.\n");
+                appendLog("Восстановление остановлено пользователем.\nВремя выполнения: " + elapsedTime + "\n");
             } catch (ExecutionException exception) {
+                String elapsedTime = stopElapsedTimeCounter();
                 restoreRecoveryControls();
                 String message = exception.getCause() == null ? exception.getMessage() : exception.getCause().getMessage();
                 ApplicationLogger.error("Восстановление остановлено", exception.getCause() == null ? exception : exception.getCause());
-                appendLog("\nОстановка: " + message + "\n");
-                JOptionPane.showMessageDialog(RecoveryFrame.this, "Операция не началась: " + message,
+                appendLog("\nОстановка: " + message + "\nВремя выполнения: " + elapsedTime + "\n");
+                JOptionPane.showMessageDialog(RecoveryFrame.this, "Операция не началась: " + message
+                                + "\nВремя выполнения: " + elapsedTime,
                         "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
         }
@@ -772,9 +805,10 @@ public final class RecoveryFrame extends JFrame {
             activeRecoveryWorker = null;
         }
 
-        private void showRecoveryCompleted(RecoveryReport report) {
-            appendLog("\n" + report.toDisplayString() + "\n");
-            JOptionPane.showMessageDialog(RecoveryFrame.this, report.toDisplayString(), "Восстановление завершено",
+        private void showRecoveryCompleted(RecoveryReport report, String elapsedTime) {
+            String message = report.toDisplayString() + "\nВремя выполнения: " + elapsedTime;
+            appendLog("\n" + message + "\n");
+            JOptionPane.showMessageDialog(RecoveryFrame.this, message, "Восстановление завершено",
                     JOptionPane.INFORMATION_MESSAGE);
         }
     }
