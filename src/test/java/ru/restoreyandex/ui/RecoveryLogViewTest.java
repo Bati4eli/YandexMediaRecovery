@@ -48,7 +48,7 @@ class RecoveryLogViewTest {
             }
 
             @Override
-            public void showInRecoveryFolder(Path folder) {
+            public void showInRecoveryFolder(Path source, Path folder) {
             }
         };
     }

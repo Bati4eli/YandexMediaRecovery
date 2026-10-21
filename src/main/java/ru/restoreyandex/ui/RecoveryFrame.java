@@ -59,7 +59,7 @@ import java.util.stream.IntStream;
 public final class RecoveryFrame extends JFrame {
     private static final URI PROJECT_REPOSITORY = URI.create("https://github.com/Bati4eli/YandexMediaRecovery");
     private static final String[] SPINNER_FRAMES = {"◐", "◓", "◑", "◒"};
-    private static final int MAX_UI_UPDATES_PER_TURN = 64;
+    private static final int MAX_UI_UPDATES_PER_TURN = 16;
     private final JTextField sourceField = new JTextField();
     private final JTextField destinationField = new JTextField();
     private final JProgressBar progressBar = new JProgressBar();
@@ -75,8 +75,9 @@ public final class RecoveryFrame extends JFrame {
         }
 
         @Override
-        public void showInRecoveryFolder(Path folder) {
-            showInExplorer(folder, false);
+        public void showInRecoveryFolder(Path source, Path folder) {
+            RecoveryResultLocator.find(source, folder)
+                    .ifPresentOrElse(file -> showInExplorer(file, true), () -> showInExplorer(folder, false));
         }
     });
     private final FolderSelectionTree folderSelectionTree = new FolderSelectionTree(new FolderSelectionTree.FolderActions() {
@@ -428,13 +429,14 @@ public final class RecoveryFrame extends JFrame {
         appendLog("Не удалось открыть в браузере: " + file + "\n");
     }
 
-    /** Открывает содержащую папку через Windows Shell, который корректно обрабатывает кириллицу в путях. */
+    /** Открывает папку через Windows Shell и выделяет файл, когда он существует. */
     private void showInExplorer(Path path, boolean selectFile) {
         Path folder = selectFile ? path.getParent() : path;
         if (folder == null) {
             reportExplorerError(path, new IllegalArgumentException("Не определена папка файла"));
             return;
         }
+        Path normalizedPath = path.toAbsolutePath().normalize();
         Path normalizedFolder = folder.toAbsolutePath().normalize();
         new SwingWorker<Void, Void>() {
             @Override
@@ -443,7 +445,12 @@ public final class RecoveryFrame extends JFrame {
                     throw new IOException("Папка не существует: " + normalizedFolder);
                 }
                 if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows")) {
-                    long result = Shell32.INSTANCE.ShellExecute(null, "open", normalizedFolder.toString(), null, null, 1)
+                    if (selectFile && !Files.isRegularFile(normalizedPath)) {
+                        throw new IOException("Файл не существует: " + normalizedPath);
+                    }
+                    String executable = selectFile ? "explorer.exe" : normalizedFolder.toString();
+                    String parameters = selectFile ? "/select,\"" + normalizedPath + "\"" : null;
+                    long result = Shell32.INSTANCE.ShellExecute(null, "open", executable, parameters, null, 1)
                             .longValue();
                     if (result <= 32) {
                         throw new IOException("Windows Shell вернул код " + result);
@@ -462,9 +469,9 @@ public final class RecoveryFrame extends JFrame {
                     get();
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
-                    reportExplorerError(normalizedFolder, exception);
+                    reportExplorerError(normalizedPath, exception);
                 } catch (ExecutionException exception) {
-                    reportExplorerError(normalizedFolder,
+                    reportExplorerError(normalizedPath,
                             exception.getCause() == null ? exception : exception.getCause());
                 }
             }
@@ -588,19 +595,15 @@ public final class RecoveryFrame extends JFrame {
         }.execute();
     }
 
-    /** Применяет ограниченную пачку событий на EDT, чтобы не блокировать взаимодействие с окном. */
+    /** Применяет короткую пачку итоговых событий на EDT, чтобы не блокировать взаимодействие с окном. */
     private void applyRecoveryUiUpdates(List<RecoveryUiUpdate> updates, Path sourceRoot, Path destinationRoot) {
         RecoveryEvent latestCompleted = null;
         for (RecoveryUiUpdate update : updates) {
-            if (update.isStarted()) {
-                logView.appendRunningFile(RecoveryLogLineFormatter.formatRunning(
-                        update.startedFile(), update.started(), update.totalFiles(), sourceRoot), update.startedFile(),
-                        recoveryFolderFor(update.startedFile(), sourceRoot, destinationRoot), false);
-                continue;
-            }
             RecoveryEvent event = update.completedEvent();
-            logView.replaceRunningFile(RecoveryLogLineFormatter.format(event, sourceRoot), event.source(),
-                    recoveryFolderFor(event.source(), sourceRoot, destinationRoot), false);
+            if (event.outcome() != ru.restoreyandex.domain.RecoveryOutcome.ALREADY_OK) {
+                logView.replaceRunningFile(RecoveryLogLineFormatter.format(event, sourceRoot), event.source(),
+                        recoveryFolderFor(event.source(), sourceRoot, destinationRoot), false);
+            }
             latestCompleted = event;
         }
         if (latestCompleted != null) {
@@ -721,11 +724,6 @@ public final class RecoveryFrame extends JFrame {
                     }
 
                     @Override
-                    public void onFileStarted(Path file, int started, int totalFiles) {
-                        uiUpdates.submit(RecoveryUiUpdate.started(file, started, totalFiles));
-                    }
-
-                    @Override
                     public void onFileProcessed(RecoveryEvent event) {
                         csvLogger.onFileProcessed(event);
                         if (event.outcome() != ru.restoreyandex.domain.RecoveryOutcome.ALREADY_OK) {
@@ -821,18 +819,10 @@ public final class RecoveryFrame extends JFrame {
         }
     }
 
-    /** Описывает один старт или финальный результат файла, ожидающий отображения в журнале. */
-    private record RecoveryUiUpdate(RecoveryEvent completedEvent, Path startedFile, int started, int totalFiles) {
-        private static RecoveryUiUpdate started(Path file, int started, int totalFiles) {
-            return new RecoveryUiUpdate(null, file, started, totalFiles);
-        }
-
+    /** Описывает итоговый результат файла, ожидающий отображения в журнале. */
+    private record RecoveryUiUpdate(RecoveryEvent completedEvent) {
         private static RecoveryUiUpdate completed(RecoveryEvent event) {
-            return new RecoveryUiUpdate(event, null, 0, 0);
-        }
-
-        private boolean isStarted() {
-            return completedEvent == null;
+            return new RecoveryUiUpdate(event);
         }
     }
 

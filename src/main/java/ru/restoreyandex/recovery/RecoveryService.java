@@ -29,6 +29,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -251,27 +252,30 @@ public final class RecoveryService {
                                          ExecutorService executor) throws InterruptedException, ExecutionException {
         ExecutorCompletionService<IndexedEvent> completion = new ExecutorCompletionService<>(executor);
         int nextSubmitted = submitted;
-        for (Path source : folder.files()) {
-            if (cancellationRequested.get()) {
-                break;
-            }
-            int ordinal = ++nextSubmitted;
-            try {
-                completion.submit(() -> {
-                    listener.onFileStarted(source, ordinal, totalFiles);
-                    return new IndexedEvent(source, recoverOne(source, sourceRoot, destinationRoot,
-                            runInspector, options, counter));
-                });
-            } catch (RejectedExecutionException exception) {
-                if (!cancellationRequested.get()) {
-                    throw exception;
-                }
-                break;
-            }
-        }
         int nextCompleted = completed;
-        int submittedInFolder = nextSubmitted - submitted;
-        for (int index = 0; index < submittedInFolder && !cancellationRequested.get();) {
+        int inFlight = 0;
+        Iterator<Path> sources = folder.files().iterator();
+        while ((sources.hasNext() || inFlight > 0) && !cancellationRequested.get()) {
+            while (sources.hasNext() && inFlight < options.parallelism() && !cancellationRequested.get()) {
+                Path source = sources.next();
+                int ordinal = ++nextSubmitted;
+                try {
+                    completion.submit(() -> {
+                        listener.onFileStarted(source, ordinal, totalFiles);
+                        return new IndexedEvent(source, recoverOne(source, sourceRoot, destinationRoot,
+                                runInspector, options, counter));
+                    });
+                    inFlight++;
+                } catch (RejectedExecutionException exception) {
+                    if (!cancellationRequested.get()) {
+                        throw exception;
+                    }
+                    break;
+                }
+            }
+            if (inFlight == 0) {
+                break;
+            }
             Future<IndexedEvent> completedFuture = completion.poll(200, java.util.concurrent.TimeUnit.MILLISECONDS);
             if (completedFuture == null) {
                 continue;
@@ -280,7 +284,7 @@ public final class RecoveryService {
             RecoveryEvent raw = result.event();
             listener.onFileProcessed(new RecoveryEvent(++nextCompleted, totalFiles, result.source(),
                     raw.outcome(), raw.message()));
-            index++;
+            inFlight--;
         }
         return new FolderProgress(nextSubmitted, nextCompleted);
     }

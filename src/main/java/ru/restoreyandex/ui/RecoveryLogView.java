@@ -175,7 +175,7 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
         menu.add(menuItem(UiIcon.BROWSER, "Показать в браузере", () -> actions.showInBrowser(entry.source())));
         menu.add(menuItem(UiIcon.SOURCE_FOLDER, "Показать в Яндекс папке", () -> actions.showInYandexFolder(entry.source())));
         menu.add(menuItem(UiIcon.RECOVERY_FOLDER, "Показать в папке восстановления", () ->
-                actions.showInRecoveryFolder(entry.recoveryFolder())));
+                actions.showInRecoveryFolder(entry.source(), entry.recoveryFolder())));
         menu.show(this, event.getX(), event.getY());
     }
 
@@ -203,7 +203,7 @@ final class RecoveryLogView extends JList<RecoveryLogEntry> {
 
         void showInYandexFolder(Path file);
 
-        void showInRecoveryFolder(Path folder);
+        void showInRecoveryFolder(Path source, Path folder);
     }
 
     private final class RecoveryLogRenderer extends DefaultListCellRenderer {
