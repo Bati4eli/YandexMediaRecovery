@@ -101,20 +101,40 @@ class RecoveryServiceTest {
     }
 
     @Test
-    void neverReplacesAnExistingDestinationFile() throws Exception {
+    void ignoresExistingDestinationFileBeforeInspectionAndSubmission() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
         writeImage(source.resolve("photo.png"), Color.BLUE);
         writeImage(destination.resolve("photo.png"), Color.RED);
+        AtomicInteger inspections = new AtomicInteger();
+        List<Path> started = new ArrayList<>();
+        List<ru.restoreyandex.domain.RecoveryEvent> processed = new ArrayList<>();
 
-        RecoveryReport report = serviceWithNoPreview().recover(source, destination, new RecoveryListener() { });
+        RecoveryReport report = serviceWith(file -> {
+            inspections.incrementAndGet();
+            return MediaInspection.readable(MediaType.IMAGE);
+        }).recover(source, destination, new RecoveryListener() {
+            @Override
+            public void onFileStarted(Path file, int ordinal, int totalFiles) {
+                started.add(file);
+            }
 
-        assertEquals(1, report.skipped());
+            @Override
+            public void onFileProcessed(ru.restoreyandex.domain.RecoveryEvent event) {
+                processed.add(event);
+            }
+        });
+
+        assertEquals(0, inspections.get());
+        assertEquals(0, report.scanned());
+        assertEquals(0, report.skipped());
+        assertTrue(started.isEmpty());
+        assertTrue(processed.isEmpty());
         assertEquals(Color.RED.getRGB(), ImageIO.read(destination.resolve("photo.png").toFile()).getRGB(0, 0));
     }
 
     @Test
-    void reportsProgressForEveryFileThatIsAlreadyRecovered() throws Exception {
+    void doesNotReportProgressForFilesThatAreAlreadyRecovered() throws Exception {
         Path source = Files.createDirectories(temporaryDirectory.resolve("source"));
         Path destination = Files.createDirectories(temporaryDirectory.resolve("destination"));
         writeImage(source.resolve("one.png"), Color.BLUE);
@@ -122,18 +142,22 @@ class RecoveryServiceTest {
         writeImage(destination.resolve("one.png"), Color.RED);
         writeImage(destination.resolve("two.png"), Color.RED);
         List<ru.restoreyandex.domain.RecoveryEvent> processed = new ArrayList<>();
+        List<Integer> totals = new ArrayList<>();
 
         serviceWithNoPreview().recover(source, destination, new RecoveryListener() {
+            @Override
+            public void onStarted(int totalFiles) {
+                totals.add(totalFiles);
+            }
+
             @Override
             public void onFileProcessed(ru.restoreyandex.domain.RecoveryEvent event) {
                 processed.add(event);
             }
         });
 
-        assertEquals(2, processed.size());
-        assertEquals(1, processed.get(0).processed());
-        assertEquals(2, processed.get(1).processed());
-        assertEquals(2, processed.get(1).total());
+        assertEquals(List.of(0), totals);
+        assertTrue(processed.isEmpty());
     }
 
     @Test

@@ -133,7 +133,7 @@ public final class RecoveryService {
             throw new IOException("Папка назначения недоступна: " + destinationRoot);
         }
         cloudPreviewExtractor.configureBrowserDebugMode(options.browserDebugMode());
-        List<FolderFiles> folders = collectSelectedFolderFiles(sourceRoot, options);
+        List<FolderFiles> folders = collectSelectedFolderFiles(sourceRoot, destinationRoot, options);
         int totalFiles = folders.stream().mapToInt(folder -> folder.files().size()).sum();
         listener.onStarted(totalFiles);
         Counter counter = new Counter();
@@ -198,11 +198,13 @@ public final class RecoveryService {
      * однако путь к явно включённой вложенной папке остаётся доступен.
      */
     /**
-     * Единственный основной обходчик строит упорядоченные батчи по папкам.
-     * Рабочие потоки получают файлы только одной папки за раз, поэтому новая
-     * папка не начинает восстановление, пока не завершилась предыдущая.
+     * Единственный основной обходчик строит упорядоченные батчи по папкам и
+     * исключает уже существующие пути назначения до передачи файлов рабочим
+     * потокам. Новая папка не начинает восстановление, пока не завершилась
+     * предыдущая.
      */
-    private List<FolderFiles> collectSelectedFolderFiles(Path sourceRoot, RecoveryOptions options) throws IOException {
+    private List<FolderFiles> collectSelectedFolderFiles(Path sourceRoot, Path destinationRoot,
+                                                         RecoveryOptions options) throws IOException {
         Map<Path, List<Path>> filesByFolder = new LinkedHashMap<>();
         Files.walkFileTree(sourceRoot, new SimpleFileVisitor<>() {
             @Override
@@ -220,7 +222,10 @@ public final class RecoveryService {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
                 if (attributes.isRegularFile() && options.folderSelection().includes(file)) {
-                    filesByFolder.computeIfAbsent(file.getParent(), ignored -> new ArrayList<>()).add(file);
+                    Path destinationFile = destinationRoot.resolve(sourceRoot.relativize(file));
+                    if (!Files.exists(destinationFile)) {
+                        filesByFolder.computeIfAbsent(file.getParent(), ignored -> new ArrayList<>()).add(file);
+                    }
                 }
                 return FileVisitResult.CONTINUE;
             }

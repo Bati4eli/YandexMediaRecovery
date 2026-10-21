@@ -6,7 +6,7 @@ import java.nio.file.Path;
 
 /** Получает события прогресса в рабочем потоке восстановления. */
 public interface RecoveryListener {
-    /** Вызывается после подсчёта файлов единственным основным обходчиком папок. */
+    /** Вызывается после подсчёта файлов, которым ещё требуется восстановление. */
     default void onStarted(int totalFiles) {
     }
 
@@ -14,7 +14,7 @@ public interface RecoveryListener {
     default void onFileStarted(Path source, int processed, int totalFiles) {
     }
 
-    /** Вызывается один раз для каждого найденного файла. */
+    /** Вызывается один раз для каждого файла, переданного рабочей задаче. */
     default void onFileProcessed(RecoveryEvent event) {
     }
 }
